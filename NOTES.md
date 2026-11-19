@@ -261,5 +261,14 @@ Grid block matching (cells of 120x100 px with texture, eye 960 px wide, separati
 No rendering fault seen in any of them (interior parts, windshield roof sticker, HUD equal in both eyes). Not measured: how it
 feels. A 19% disparity is certainly far beyond comfortable fusion on a fixed-focus display; 5% is still large.
 
+### Separate stereo values for the in-car views (done)
+`interior_separation` (0.02) and `interior_convergence` (3), blended with `separation`/`convergence` by the projection's near
+plane (`Vr_ViewStereo` in `src/render/vr_layout.h`: near 0.1 = in car, 1.0 = outside, linear between; the near plane is read from
+the matrix as `-_43/_33`, so no change in `game/` and no jump while the camera blends). Both are in the in-game list (IN-CAR SEP,
+IN-CAR CONV) and in the ini. Unit test covers outside, in-car, between and below 0.1.
+Measured again with the defaults (same frames and method): chase unchanged (far objects +0..+6 px); bumper min -12 px (was -50);
+cockpit 1/2/3 min -48..-50 px, p10 about -26 (was -170..-180 and -95). The 0.02 / 3 defaults are the values measured above, not
+values tuned on a person: still 5% of the eye width at the dash. Flat mode: first 981 hashes and the trace unchanged.
+
 ## Decisions
 (none yet)

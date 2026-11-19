@@ -126,7 +126,7 @@ int main()
     // The in-game adjustment: steps stay on the grid and in range.
     int count;
     const VrParam *params = Vr_Params(&count);
-    Check(count == 6, "six adjustable options");
+    Check(count == 8, "eight adjustable options");
     for (int i = 0; i < count; i++) {
         const VrParam &q = params[i];
         Check(Near(Vr_StepParam(q, q.def, 0), q.def, q.step * 0.01f) || q.def != std::round(q.def / q.step) * q.step,
@@ -136,6 +136,27 @@ int main()
         Check(Vr_StepParam(q, q.def, -1) < q.def || q.def == q.min, "step down");
     }
     Check(Near(Vr_StepParam(params[0], 0.08f, 1), 0.085f, 1e-5f), "shift steps by 0.005");
+
+    // Per-view stereo values come from the projection's near plane (0.1 in the car, 1.0 outside).
+    VrConfig sv;
+    auto projNear = [](float n, float f, float out[16]) {
+        for (int i = 0; i < 16; i++) out[i] = 0;
+        out[0] = 1.5f; out[5] = 2.0f; out[10] = f / (f - n); out[11] = 1; out[14] = -n * f / (f - n);
+    };
+    float pn[16], sp, cv;
+    projNear(1.0f, 250.0f, pn);
+    Vr_ViewStereo(pn, sv, &sp, &cv);
+    Check(Near(sp, sv.separation) && Near(cv, sv.convergence), "outside view: separation and convergence");
+    projNear(0.1f, 250.0f, pn);
+    Vr_ViewStereo(pn, sv, &sp, &cv);
+    Check(Near(sp, sv.interiorSeparation) && Near(cv, sv.interiorConvergence), "in-car view: interior values");
+    projNear(0.55f, 150.0f, pn);
+    Vr_ViewStereo(pn, sv, &sp, &cv);
+    Check(sp > sv.interiorSeparation && sp < sv.separation && Near(sp, 0.5f * (sv.separation + sv.interiorSeparation), 1e-3f),
+          "between: blended");
+    projNear(0.01f, 150.0f, pn);
+    Vr_ViewStereo(pn, sv, &sp, &cv);
+    Check(Near(sp, sv.interiorSeparation), "near plane below 0.1 clamps");
 
     printf("vr layout: ok\n");
     return 0;

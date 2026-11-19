@@ -1338,9 +1338,10 @@ struct Executor : GfxExecutor {
                     VertexUniforms vu;
                     if (eyeKey >= 0) {
                         GfxDrawState eyeState = s;
-                        Vr_EyeMatrices((const float *)&s.view, (const float *)&s.projection, eyeKey,
-                                       vrConfig.separation, vrConfig.convergence, (float *)&eyeState.view,
-                                       (float *)&eyeState.projection);
+                        float separation, convergence;
+                        Vr_ViewStereo((const float *)&s.projection, vrConfig, &separation, &convergence);
+                        Vr_EyeMatrices((const float *)&s.view, (const float *)&s.projection, eyeKey, separation,
+                                       convergence, (float *)&eyeState.view, (float *)&eyeState.projection);
                         FillVertexUniforms(c, eyeState, targetW, targetH, viewport, scaled, vu);
                     } else {
                         FillVertexUniforms(c, s, targetW, targetH, viewport, scaled, vu);

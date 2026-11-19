@@ -26,6 +26,8 @@ VrConfig Vr_LoadConfig(void)
     c.renderScale = Float("vr.render_scale", c.renderScale);
     c.separation = Float("vr.separation", c.separation);
     c.convergence = Float("vr.convergence", c.convergence);
+    c.interiorSeparation = Float("vr.interior_separation", c.interiorSeparation);
+    c.interiorConvergence = Float("vr.interior_convergence", c.interiorConvergence);
     if (!c.lens)
         c.k1 = c.k2 = 0.0f;
     return Vr_Clamp(c);

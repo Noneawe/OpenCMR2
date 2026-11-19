@@ -21,6 +21,10 @@ struct VrConfig {
     // distance of the plane that has no parallax.
     float separation = 0.065f;
     float convergence = 10.0f;
+    // The same for the in-car views, whose near parts (dash, wheel, pillars) are
+    // far closer to the eyes: a smaller separation keeps their disparity bearable.
+    float interiorSeparation = 0.02f;
+    float interiorConvergence = 3.0f;
 };
 
 // An eye's picture on the screen, in pixels (origin top left).
@@ -38,6 +42,8 @@ inline VrConfig Vr_Clamp(VrConfig c)
     c.renderScale = std::clamp(c.renderScale, 0.25f, 1.0f);
     c.separation = std::clamp(c.separation, 0.0f, 2.0f);
     c.convergence = std::max(c.convergence, 0.5f);
+    c.interiorSeparation = std::clamp(c.interiorSeparation, 0.0f, 2.0f);
+    c.interiorConvergence = std::max(c.interiorConvergence, 0.5f);
     return c;
 }
 
@@ -106,6 +112,8 @@ inline const VrParam *Vr_Params(int *count)
         { "LENS K2", "vr.lens_k2", -0.5f, 1.0f, 0.01f, 0.192f, 3, false },
         { "SEPARATION", "vr.separation", 0.0f, 0.2f, 0.005f, 0.065f, 3, true },
         { "CONVERGENCE", "vr.convergence", 1.0f, 100.0f, 0.5f, 10.0f, 1, true },
+        { "IN-CAR SEP", "vr.interior_separation", 0.0f, 0.2f, 0.005f, 0.02f, 3, true },
+        { "IN-CAR CONV", "vr.interior_convergence", 0.5f, 100.0f, 0.5f, 3.0f, 1, true },
     };
     *count = (int)(sizeof(params) / sizeof(params[0]));
     return params;
@@ -122,6 +130,18 @@ inline float Vr_StepParam(const VrParam &p, float value, int n)
 inline bool Vr_IsPerspective(const float proj[16])
 {
     return proj[11] == 1.0f && proj[15] == 0.0f;
+}
+
+// The stereo values for a perspective projection. The in-car views have a
+// near plane of 0.1, the outside ones 1.0 (the game's SetProjection calls);
+// the near plane is read back from the matrix (_43 = -near * _33) and the
+// values blended between the two, so a switch of camera does not jump.
+inline void Vr_ViewStereo(const float proj[16], const VrConfig &c, float *separation, float *convergence)
+{
+    const float nearPlane = proj[10] != 0.0f ? -proj[14] / proj[10] : 1.0f;
+    const float t = std::clamp((nearPlane - 0.1f) / (1.0f - 0.1f), 0.0f, 1.0f);   // 0 in the car, 1 outside
+    *separation = c.interiorSeparation + (c.separation - c.interiorSeparation) * t;
+    *convergence = c.interiorConvergence + (c.convergence - c.interiorConvergence) * t;
 }
 
 // One eye's view and projection from the game's (row-major, Direct3D: v' = v M,
