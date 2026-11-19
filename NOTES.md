@@ -123,5 +123,30 @@ Results (two identical runs a/b, 500 ticks, 1851 presented frames, 19 BMPs each)
 - Frames saved: `build/vr-baseline/flat/dump-{a,b}/frame-NNNNNN.bmp` (local only, not committed).
 - Verified on desktop only. Nothing about phone/goggles.
 
+## Stage 2 — gamepad, no touch in VR
+
+Findings (code read):
+- Menus and race work with a pad by default (`src/input/bindings.cpp`, `s_gamepad`): D-pad/left stick move,
+  A confirm, B back, left stick steers, triggers throttle/brake, A handbrake, Y camera, Start/Back pause.
+- Android overlay (`TouchControls.kt`) hid only while a gamepad was in use and came back on ANY touch
+  (`onInput`), so a finger on the phone in goggles would bring it back. `ControllerProfiles.touchOnly` could also
+  make the native side ignore controllers.
+- Settings file on Android is `<filesDir>/opencmr2.ini` (SDL_GetPrefPath = internal storage dir).
+
+Change (commit "Stage 2"): `[vr] enabled = 0|1` in the default ini template (`src/platform/sys.cpp`);
+`VrSettings.kt` parses it; with `enabled = 1` `TouchControls.show()` never shows the overlay (touch cannot bring it
+back) and `GameActivity.useTouchControlsOnly()` returns false. Preview in the layout editor is unaffected.
+Existing installs: the key is absent = 0 (template is written only for new files).
+Tests: `VrSettingsTest` (parser, 2 cases) passes; `ctest --preset linux` 25/25; `assembleDebug` OK.
+Not verified: behaviour on a device/emulator with game data (needs a game folder there), real pad navigation of
+every menu, any goggles.
+
+Open points for Stage 2:
+- Text entry (driver name, LAN chat) uses Android's on-screen bar when there is no hardware keyboard: touch only.
+  Needs a pad-only answer (or accept a plain keyboard for setup).
+- The Android Back button/gesture maps to Escape; with a pad, Start/Back are bound in the game.
+- Setup screens (`SetupActivity`, folder picker) are touch; do them before putting the phone in goggles.
+- Switching VR on needs editing `opencmr2.ini` for now; live settings are an open Stage 3 decision.
+
 ## Decisions
 (none yet)

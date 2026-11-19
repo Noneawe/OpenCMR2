@@ -35,7 +35,8 @@ import org.libsdl.app.SDLActivity
  * steer, accelerate and brake are Up and Down (and move through the menus),
  * Space is the handbrake, ] and [ change gear, C the camera, Enter and Escape
  * confirm and go back or pause. One layout serves the menus and the stages.
- * They hide while a gamepad is played and come back on a touch.
+ * They hide while a gamepad is played and come back on a touch, except in VR
+ * mode (`[vr] enabled = 1`, VrSettings), where they never show.
  */
 class TouchControls(
     private val activity: Activity,
@@ -229,7 +230,8 @@ class TouchControls(
     private var shown = true
 
     private fun show(visible: Boolean) {
-        shown = preview || visible || ControllerProfiles.showTouch(activity) || ControllerProfiles.touchOnly(activity)
+        shown = preview || (!VrSettings.enabled(activity) &&
+            (visible || ControllerProfiles.showTouch(activity) || ControllerProfiles.touchOnly(activity)))
         if (!shown || suspended) releaseAll()
         overlay.isVisible = shown && !suspended
     }

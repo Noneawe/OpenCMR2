@@ -20,7 +20,7 @@ class GameActivity : SDLActivity() {
         ControllerProfiles.mapping(this, name, vendor, product)
 
     @Keep
-    fun useTouchControlsOnly(): Boolean = ControllerProfiles.touchOnly(this)
+    fun useTouchControlsOnly(): Boolean = ControllerProfiles.touchOnly(this) && !VrSettings.enabled(this)
 
     // Called by input_sdl.cpp: the controls pages list the keyboard players
     // only with a physical keyboard; the touch controls are edited here.
