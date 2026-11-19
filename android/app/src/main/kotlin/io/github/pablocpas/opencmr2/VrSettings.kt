@@ -13,8 +13,17 @@ object VrSettings {
     fun enabled(context: Context): Boolean =
         runCatching { parseEnabled(File(context.filesDir, "opencmr2.ini").readText()) }.getOrDefault(false)
 
+    fun headTracking(context: Context): Boolean =
+        runCatching {
+            val ini = File(context.filesDir, "opencmr2.ini").readText()
+            parseEnabled(ini) && parseFlag(ini, "head_tracking")
+        }.getOrDefault(false)
+
     /** `[vr] enabled = 1` (section and key are case-insensitive, `;` and `#` start comments). */
-    fun parseEnabled(ini: String): Boolean {
+    fun parseEnabled(ini: String): Boolean = parseFlag(ini, "enabled")
+
+    /** `[vr] <key> = 1`. */
+    fun parseFlag(ini: String, key: String): Boolean {
         var section = ""
         for (raw in ini.lineSequence()) {
             val line = raw.trim()
@@ -23,8 +32,8 @@ object VrSettings {
                 section = line.substringAfter('[').substringBefore(']').trim().lowercase()
                 continue
             }
-            val key = line.substringBefore('=', "").trim().lowercase()
-            if (section == "vr" && key == "enabled") return line.substringAfter('=').trim().startsWith("1")
+            if (section == "vr" && line.substringBefore('=', "").trim().lowercase() == key)
+                return line.substringAfter('=').trim().startsWith("1")
         }
         return false
     }

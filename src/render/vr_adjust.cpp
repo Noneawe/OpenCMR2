@@ -3,6 +3,7 @@
 #include "port/sys.h"
 #include "render/vr.h"
 #include "render/vr_adjust.h"
+#include "render/vr_head.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +16,7 @@ namespace {
 bool s_active;
 int s_selected;
 bool s_changed;
-bool s_prevUp, s_prevDown, s_prevReset;
+bool s_prevUp, s_prevDown, s_prevReset, s_prevRecenter;
 uint64_t s_nextRepeat, s_pressedAt;
 int s_lastDirection;
 
@@ -56,7 +57,7 @@ void Select(int direction)
 
 } // namespace
 
-void Vr_AdjustUpdate(bool held, bool up, bool down, bool left, bool right, bool reset, uint64_t nowMs)
+void Vr_AdjustUpdate(bool held, bool up, bool down, bool left, bool right, bool reset, bool recenter, uint64_t nowMs)
 {
     int n;
     const VrParam *params = Vr_Params(&n);
@@ -65,6 +66,7 @@ void Vr_AdjustUpdate(bool held, bool up, bool down, bool left, bool right, bool 
         s_prevUp = up;
         s_prevDown = down;
         s_prevReset = reset;
+        s_prevRecenter = recenter;
         s_lastDirection = 0;
         if (held) {
             s_selected = 0;
@@ -87,9 +89,12 @@ void Vr_AdjustUpdate(bool held, bool up, bool down, bool left, bool right, bool 
         SetValue(params[s_selected], params[s_selected].def, false);
         s_changed = true;
     }
+    if (recenter && !s_prevRecenter)
+        Vr_HeadRecenter();
     s_prevUp = up;
     s_prevDown = down;
     s_prevReset = reset;
+    s_prevRecenter = recenter;
     const int direction = (right ? 1 : 0) - (left ? 1 : 0);
     if (direction == 0) {
         s_lastDirection = 0;
@@ -134,6 +139,7 @@ const Glyph kGlyphs[] = {
     {'S', {".####", "#....", "#....", ".###.", "....#", "....#", "####."}},
     {'T', {"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."}},
     {'U', {"#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."}},
+    {'Y', {"#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."}},
     {'V', {"#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."}},
     {'0', {".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."}},
     {'1', {"..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."}},
@@ -224,7 +230,9 @@ void Vr_AdjustDraw(int width, int height)
     // The list is 33 characters wide: it takes at most 85% of the eye's width.
     const float scale = (float)std::max(1, std::min(height / 200, (int)(width * 0.85f / (33 * 6))));
     const float line = 10 * scale;
-    int lines = 1;
+    const VrConfig config = Vr_LoadConfig();
+    const bool headHint = config.stereo && config.headTracking;
+    int lines = 1 + (headHint ? 1 : 0);
     for (int i = 0; i < n; i++)
         lines += Shown(params[i], stereo);
 
@@ -272,6 +280,8 @@ void Vr_AdjustDraw(int width, int height)
         Text(text, x0, y, scale, i == s_selected ? 0xffffffff : 0xffb0b0b0);
         y += line;
     }
+    if (headHint)
+        Text("Y  RECENTER HEAD", x0, y, scale, 0xffffff80);
     Gfx_EndScene();
     Gfx_PopState();
 }

@@ -249,6 +249,7 @@ target_sources(opencmr2_platform PRIVATE
     render/gfx_gpu.cpp
     render/vr.cpp
     render/vr_adjust.cpp
+    render/vr_head.cpp
     render/outline_font.cpp
     render/distance_field.cpp
     render/vector_sprite.cpp

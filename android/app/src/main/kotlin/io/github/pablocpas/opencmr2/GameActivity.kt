@@ -13,6 +13,7 @@ import org.libsdl.app.SDLControllerManager
 class GameActivity : SDLActivity() {
     private var controls: TouchControls? = null
     private var textEntry: TextEntry? = null
+    private var head: HeadTracker? = null
 
     // Called by input_sdl.cpp before opening a controller.
     @Keep
@@ -52,6 +53,7 @@ class GameActivity : SDLActivity() {
         if (!mBrokenLibraries && mLayout != null) {
             controls = TouchControls(this, mLayout)
             textEntry = TextEntry(this, mLayout) { open -> controls?.setSuspended(open) }
+            if (VrSettings.headTracking(this)) head = HeadTracker(this)
         }
     }
 
@@ -97,6 +99,7 @@ class GameActivity : SDLActivity() {
     }
 
     override fun onPause() {
+        head?.stop()
         controls?.releaseAll()
         super.onPause()
     }
@@ -104,11 +107,14 @@ class GameActivity : SDLActivity() {
     override fun onResume() {
         super.onResume()
         controls?.reloadLayout()
+        head?.start()
     }
 
     override fun onDestroy() {
         textEntry?.end()
         textEntry = null
+        head?.stop()
+        head = null
         controls?.close()
         controls = null
         super.onDestroy()

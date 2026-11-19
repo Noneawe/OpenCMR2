@@ -19,6 +19,7 @@ VrConfig Vr_LoadConfig(void)
     c.enabled = Platform_GetSettingInt("vr.enabled", 0) != 0;
     c.stereo = strncasecmp(Platform_GetSetting("vr.mode", "cinema"), "stereo", 6) == 0;
     c.lens = Platform_GetSettingInt("vr.lens_enabled", 1) != 0;
+    c.headTracking = Platform_GetSettingInt("vr.head_tracking", 0) != 0;
     c.k1 = Float("vr.lens_k1", c.k1);
     c.k2 = Float("vr.lens_k2", c.k2);
     c.shift = Float("vr.shift", c.shift);

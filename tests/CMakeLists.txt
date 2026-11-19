@@ -31,7 +31,8 @@ add_test(NAME movie_playback COMMAND movie_playback_test)
 add_executable(movie_render_state_test movie_render_state.cpp
     ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp
     ${PROJECT_SOURCE_DIR}/src/video/movie.cpp ${PROJECT_SOURCE_DIR}/src/render/gfx_core.cpp
-    ${PROJECT_SOURCE_DIR}/src/render/vr.cpp ${PROJECT_SOURCE_DIR}/src/render/vr_adjust.cpp)
+    ${PROJECT_SOURCE_DIR}/src/render/vr.cpp ${PROJECT_SOURCE_DIR}/src/render/vr_adjust.cpp
+    ${PROJECT_SOURCE_DIR}/src/render/vr_head.cpp)
 target_link_libraries(movie_render_state_test PRIVATE opencmr2_bink SDL3::SDL3)
 add_test(NAME movie_render_state COMMAND movie_render_state_test)
 

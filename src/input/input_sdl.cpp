@@ -944,7 +944,7 @@ extern "C" void Input_Update(void)
     // [vr] options on the gamepad: both stick buttons held (render/vr_adjust.h).
     // While it is open the game gets no input at all.
     {
-        bool held = false, up = false, down = false, left = false, right = false, reset = false;
+        bool held = false, up = false, down = false, left = false, right = false, reset = false, recenter = false;
         if (Platform_GetSettingInt("vr.enabled", 0) != 0) {
             for (const InputDevice &device : s_devices) {
                 SDL_Gamepad *pad = device.id != 0 ? device.gamepad : NULL;
@@ -957,10 +957,11 @@ extern "C" void Input_Update(void)
                 left = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
                 right = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
                 reset = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH);
+                recenter = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_NORTH);
                 break;
             }
         }
-        Vr_AdjustUpdate(held, up, down, left, right, reset, SDL_GetTicks());
+        Vr_AdjustUpdate(held, up, down, left, right, reset, recenter, SDL_GetTicks());
         if (Vr_AdjustActive())
             for (Player &player : s_players)
                 memset(player.values, 0, sizeof(player.values));

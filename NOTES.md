@@ -270,5 +270,31 @@ Measured again with the defaults (same frames and method): chase unchanged (far 
 cockpit 1/2/3 min -48..-50 px, p10 about -26 (was -170..-180 and -95). The 0.02 / 3 defaults are the values measured above, not
 values tuned on a person: still 5% of the eye width at the dash. Flat mode: first 981 hashes and the trace unchanged.
 
+## Stage 5 — head tracking (optional, default off)
+
+`[vr] head_tracking = 1`, only with `enabled = 1` and `mode = stereo`. No change in `game/`.
+- Android: `HeadTracker.kt` (started by `GameActivity` only when both flags are on, stopped on pause) reads
+  `TYPE_GAME_ROTATION_VECTOR` (falls back to `TYPE_ROTATION_VECTOR`), makes a rotation matrix, remaps it for the display rotation
+  (the phone lies on its side in goggles) and calls `HeadTracker.nativeRotation` (JNI, `src/render/vr_head.cpp`). The first sample is
+  the straight-ahead pose; in the adjust list (L3 + R3) Y recentres. The list shows the hint line only with head tracking on.
+- Native: `Vr_HeadViewMatrix` (`vr_layout.h`) = camera-space rotation (Direct3D row vectors) of the pose relative to the reference;
+  `ExecuteGpu` puts it after the game's view (`view * head`) for the same draws that get the eye offset, before the eye translation, so
+  the eyes turn with the head. It is an offset: the game's own camera still drives. Off => no cost, no change.
+- Hardware axes: device x right, y up, z out of the screen; game camera x right, y up, z forward (z = -device z).
+
+Verified on desktop with an injected pose (`tests/stage_probe.cpp`: `OPENCMR2_PROBE_HEAD="yaw,pitch,fromRaceFrame"`), stereo, chase view,
+same frames compared against a run with the straight-ahead pose (physics trace identical in all three runs):
+- yaw 20 deg right: the scenery moves left by 326 px of the 960 px eye; pitch 15 deg up: it moves down by 252 px. Directions are the
+  ones a head turn gives. Size matches the projection (tan(angle) times the projection scale), i.e. the motion is 1:1.
+- `vr_layout` test: right turn moves the point ahead left, looking up moves it down, same pose = identity, rotation stays orthonormal.
+- `ctest` 26/26, `assembleDebug` OK (native lib has the JNI function in arm64-v8a and x86_64), Kotlin unit tests 3/3 (flag parser).
+- Flat mode: first 981 hashes and trace unchanged.
+NOT verified: the Android sensor path (not run on the emulator or phone: it needs the game folder in the app and a sensor),
+the remap for each display rotation, drift of the game rotation vector, latency (the pose is taken once per presented frame, not
+predicted), the Y glyph/hint line in the list (never looked at), comfort and motion sickness.
+Limits seen or expected: only the stereo path moves (cinema mode ignores it); billboards, particles, lens flares and the 2D layers
+are drawn by the game for its own single camera, so with big turns they can look wrong; the in-car views rotate the whole interior
+with the camera, as a head turn would. Look at it with the range of real head motion before trusting it.
+
 ## Decisions
 (none yet)

@@ -16,6 +16,7 @@
 #include "Graphics.h"
 #include "RaceCallbackStorage.h"
 #include "port/gfx.h"
+#include "render/vr_head.h"
 #include "FrontendMenus.h"
 #include "Menu.h"
 #include "Car.h"
@@ -33,6 +34,7 @@
 #define SDL_MAIN_HANDLED
 #include <chrono>
 #include <SDL3/SDL_main.h>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -609,6 +611,26 @@ int main(int argc, char **argv) {
                 extern int g_viewNearPlanes[2], g_viewZooms[2];
                 fprintf(stderr, "probe: race frame %u camera type %d zoom %.3f near %.3f\n", raceFrame,
                         View_GetActiveCameraMode(0), g_viewZooms[0] / 65536.0, g_viewNearPlanes[0] / 65536.0);
+            }
+        }
+        // OPENCMR2_PROBE_HEAD="yaw,pitch,from": a head pose (degrees: yaw to the right, pitch up) from race
+        // frame `from` on, after the straight-ahead pose; for the head tracking checks (NOTES.md).
+        if (mode == 3) {
+            if (const char *head = getenv("OPENCMR2_PROBE_HEAD")) {
+                float yaw = 0, pitch = 0;
+                unsigned from = 0;
+                sscanf(head, "%f,%f,%u", &yaw, &pitch, &from);
+                const float a = yaw * 3.14159265f / 180.0f, b = pitch * 3.14159265f / 180.0f;
+                if (raceFrame < from) { yaw = pitch = 0; }
+                const float ya = raceFrame < from ? 0.0f : a, pb = raceFrame < from ? 0.0f : b;
+                // R = Ry(-yaw) * Rx(pitch), device axes to world axes.
+                const float ry[9] = { cosf(ya), 0, -sinf(ya), 0, 1, 0, sinf(ya), 0, cosf(ya) };
+                const float rx[9] = { 1, 0, 0, 0, cosf(pb), -sinf(pb), 0, sinf(pb), cosf(pb) };
+                float r[9];
+                for (int i = 0; i < 3; i++)
+                    for (int j = 0; j < 3; j++)
+                        r[i * 3 + j] = ry[i * 3] * rx[j] + ry[i * 3 + 1] * rx[3 + j] + ry[i * 3 + 2] * rx[6 + j];
+                Vr_HeadSetRotation(r);
             }
         }
         // Rally Challenge has a bracket confirmation screen inside race

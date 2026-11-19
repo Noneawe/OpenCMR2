@@ -8,6 +8,7 @@
 
 #include "shaders_spirv.h"
 #include "render/vr.h"
+#include "render/vr_head.h"
 
 // SPIR-V and, when built, MSL code of one shader for Executor::Shader.
 #ifdef OPENCMR2_SHADERS_MSL
@@ -1237,6 +1238,9 @@ struct Executor : GfxExecutor {
         // on the back buffer is read by the drawing into textures.
         GfxTexture *passTarget = NULL;
         const VrConfig vrConfig = stereo ? Vr_LoadConfig() : VrConfig();
+        // Head tracking: the phone's rotation, once per frame, put after the game's view.
+        float headMatrix[16];
+        const bool headTracked = stereo && vrConfig.headTracking && Vr_HeadMatrix(headMatrix);
         int vertexUniformEye = -1;
         for (int phase = 0; phase < 2; phase++) {
           // The back buffer's commands run once per eye in stereo.
@@ -1340,8 +1344,14 @@ struct Executor : GfxExecutor {
                         GfxDrawState eyeState = s;
                         float separation, convergence;
                         Vr_ViewStereo((const float *)&s.projection, vrConfig, &separation, &convergence);
-                        Vr_EyeMatrices((const float *)&s.view, (const float *)&s.projection, eyeKey, separation,
-                                       convergence, (float *)&eyeState.view, (float *)&eyeState.projection);
+                        float headedView[16];
+                        const float *view = (const float *)&s.view;
+                        if (headTracked) {
+                            Vr_MulMatrices(view, headMatrix, headedView);
+                            view = headedView;
+                        }
+                        Vr_EyeMatrices(view, (const float *)&s.projection, eyeKey, separation, convergence,
+                                       (float *)&eyeState.view, (float *)&eyeState.projection);
                         FillVertexUniforms(c, eyeState, targetW, targetH, viewport, scaled, vu);
                     } else {
                         FillVertexUniforms(c, s, targetW, targetH, viewport, scaled, vu);

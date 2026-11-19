@@ -25,6 +25,7 @@ struct VrConfig {
     // far closer to the eyes: a smaller separation keeps their disparity bearable.
     float interiorSeparation = 0.02f;
     float interiorConvergence = 3.0f;
+    bool headTracking = false;  // stereo only: the phone's orientation turns the camera
 };
 
 // An eye's picture on the screen, in pixels (origin top left).
@@ -142,6 +143,38 @@ inline void Vr_ViewStereo(const float proj[16], const VrConfig &c, float *separa
     const float t = std::clamp((nearPlane - 0.1f) / (1.0f - 0.1f), 0.0f, 1.0f);   // 0 in the car, 1 outside
     *separation = c.interiorSeparation + (c.separation - c.interiorSeparation) * t;
     *convergence = c.interiorConvergence + (c.convergence - c.interiorConvergence) * t;
+}
+
+// out = a * b for row-major 4x4 matrices (row vectors: apply a, then b).
+inline void Vr_MulMatrices(const float a[16], const float b[16], float out[16])
+{
+    float t[16];
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            t[i * 4 + j] = a[i * 4] * b[j] + a[i * 4 + 1] * b[4 + j] + a[i * 4 + 2] * b[8 + j] + a[i * 4 + 3] * b[12 + j];
+    for (int i = 0; i < 16; i++)
+        out[i] = t[i];
+}
+
+// Head tracking. r0 (the pose when recentred) and r (now) are the sensor's
+// rotation matrices, row-major 3x3, mapping device axes to world axes as Android
+// gives them (device in landscape: x right, y up, z out of the screen towards
+// the face). The result is a Direct3D camera-space rotation (row vectors:
+// x right, y up, z forward, so z = -device z) to put after the game's view: a
+// point straight ahead moves left when the head turns right, down when it
+// looks up. Identity when r == r0.
+inline void Vr_HeadViewMatrix(const float r0[9], const float r[9], float out[16])
+{
+    static const float flip[3] = { 1.0f, 1.0f, -1.0f };
+    for (int i = 0; i < 16; i++)
+        out[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            float rel = 0.0f;                       // (r0^T r)_ij
+            for (int k = 0; k < 3; k++)
+                rel += r0[k * 3 + i] * r[k * 3 + j];
+            out[i * 4 + j] = flip[i] * flip[j] * rel;
+        }
 }
 
 // One eye's view and projection from the game's (row-major, Direct3D: v' = v M,

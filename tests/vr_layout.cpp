@@ -158,6 +158,41 @@ int main()
     Vr_ViewStereo(pn, sv, &sp, &cv);
     Check(Near(sp, sv.interiorSeparation), "near plane below 0.1 clamps");
 
+    // Head tracking. Device axes: x right, y up, z out of the screen (towards the face);
+    // R maps device to world, columns of a right-handed rotation, row-major here.
+    const float I3[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    float M[16];
+    Vr_HeadViewMatrix(I3, I3, M);
+    for (int i = 0; i < 16; i++)
+        Check(M[i] == ((i % 5 == 0) ? 1.0f : 0.0f), "same pose: identity");
+    auto ahead = [&](const float m[16], float *x, float *y, float *z) {   // (0,0,1) * m
+        *x = m[8]; *y = m[9]; *z = m[10];
+    };
+    const float a = 0.5235988f;   // 30 degrees
+    // Head turned right: right-handed rotation about -y.
+    const float yawRight[9] = { std::cos(a), 0, -std::sin(a), 0, 1, 0, std::sin(a), 0, std::cos(a) };
+    float x, y, z;
+    Vr_HeadViewMatrix(I3, yawRight, M);
+    ahead(M, &x, &y, &z);
+    Check(x < -0.4f && Near(y, 0) && z > 0.8f && Near(x * x + y * y + z * z, 1.0f), "head right: the point ahead moves left");
+    // Head looking up: right-handed rotation about +x.
+    const float pitchUp[9] = { 1, 0, 0, 0, std::cos(a), -std::sin(a), 0, std::sin(a), std::cos(a) };
+    Vr_HeadViewMatrix(I3, pitchUp, M);
+    ahead(M, &x, &y, &z);
+    Check(Near(x, 0) && y < -0.4f && z > 0.8f, "head up: the point ahead moves down");
+    // Relative to the reference: the same pose as the reference is identity again.
+    Vr_HeadViewMatrix(yawRight, yawRight, M);
+    for (int i = 0; i < 16; i++)
+        Check(Near(M[i], (i % 5 == 0) ? 1.0f : 0.0f), "recentred pose: identity");
+    // Orthonormal (no stretch).
+    Vr_HeadViewMatrix(I3, yawRight, M);
+    Check(Near(M[0] * M[0] + M[1] * M[1] + M[2] * M[2], 1.0f), "rotation row has unit length");
+    // Matrix product: view * head applies the view first.
+    const float shiftX[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1 };
+    float P[16];
+    Vr_MulMatrices(shiftX, M, P);
+    Check(Near(P[12], 5.0f * M[0]) && Near(P[14], 5.0f * M[2]), "translation then rotation");
+
     printf("vr layout: ok\n");
     return 0;
 }
