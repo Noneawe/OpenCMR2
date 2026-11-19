@@ -231,5 +231,23 @@ NOT verified: an actual gamepad (L3+R3 combination, D-pad, repeat feel; I could 
 goggles. A stick click can happen by accident; both together should be rare. Cinema mode list hides separation and
 convergence.
 
+## Stage 4 follow-up — other camera views in stereo (desktop, composed frames)
+
+How: `tests/stage_probe.cpp` got `OPENCMR2_PROBE_CAMERA_AT_FRAMES="a,b,..."` (presses C for 6 race frames from each listed race frame);
+run with `mode = stereo`, `shift = 0`, `margin = 0`, defaults otherwise, frames dumped every 40. With the camera key pressed the
+physics trace differs from the reference from tick 177 on (a probe with extra input, not a VR effect; not investigated why the camera
+key changes the car state). Frames looked at: a low/bumper-like view, a bonnet view and the cockpit (all views the key cycles to in
+this run; chase view was checked before).
+- All of them render in both eyes with a sane picture: no missing or doubled interior parts, HUD identical in both eyes, scenery
+  consistent. Looked at a contact sheet of 9 frames and the cockpit frame at full size.
+- Disparity by block matching, right eye relative to left (960 px wide eye, separation 0.065, convergence 10):
+  cockpit steering wheel / dash: -179 px (about 19% of the eye width); windshield scenery: +4 px; low view ground: -80 px.
+  So near parts have a very large crossed disparity at the default values. That is a prediction of discomfort or a picture
+  that will not fuse in goggles (not measured on a person). The units guess (1 unit ~ 1 m) may also be off for the cockpit.
+  Ideas, none done: smaller `separation` or a per-view value (the near plane differs per view: `g_viewNearPlanes`), clamping the
+  disparity of near geometry, or bigger `convergence` in the cockpit.
+- Particles, reflections, shadows: nothing odd in the frames above, but no dedicated check (no frame with heavy dust/rain).
+- Not checked: replay/other camera sets, split screen, helicopter/replay views.
+
 ## Decisions
 (none yet)

@@ -595,6 +595,15 @@ int main(int argc, char **argv) {
                     zones, d[0], d[1], d[2], d[3], d[4]);
         }
         memset(keys, 0, sizeof(keys));
+        // OPENCMR2_PROBE_CAMERA_AT_FRAMES="a,b,...": press the camera key (C) for 6 frames
+        // from each listed race frame, to look at every view (the stereo checks, NOTES.md).
+        if (mode == 3) {
+            if (const char *list = getenv("OPENCMR2_PROBE_CAMERA_AT_FRAMES"))
+                for (const char *p = list; *p; p = strchr(p, ',') ? strchr(p, ',') + 1 : p + strlen(p)) {
+                    const unsigned at = unsigned(atoi(p));
+                    if (raceFrame >= at && raceFrame < at + 6) keys[0x2e] = 0x80;
+                }
+        }
         // Rally Challenge has a bracket confirmation screen inside race
         // resource mode, before any simulation tick can run.
         if (mode == 3 && probe.tick == 0 && CGameInfo::GetConfiguredGameMode() == 4 && frame % 12 == 6)
