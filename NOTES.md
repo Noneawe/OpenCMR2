@@ -97,5 +97,31 @@ Game logic runs once per frame (nothing in `game/` re-executed). Expected `game/
 - Split-screen (several viewports) and `CGameInfo::IsSplitBarEnabled()` need a check in VR (disable?).
 - Not yet read: input/touch overlay code (Stage 2), `Hud_BeginView`, cockpit camera/near plane (Stage 4).
 
+### Flat-mode reference frames (desktop, real GPU, before any SBS change)
+Game data: extracted from `CMR2.iso` (folders `Game`, `FrontEnd`, `Sounds`, `CountrySpecific`, `SetupRep`) to
+`~/cmr2game`, outside the repo. Never commit it.
+
+Machine: Intel UHD 630 (Mesa), Wayland, log says `SDL_GPU driver vulkan`, back buffer 1920x1080.
+Commands (from repo root; `build/` is git-ignored):
+```
+python3 tools/stage_baseline.py run --data ~/cmr2game --probe build/linux/tests/stage_probe \
+    --output build/vr-baseline/logic --rates 60          # headless; makes inputs.csv; all traces identical
+SDL_VIDEODRIVER=wayland SDL_AUDIODRIVER=dummy XDG_DATA_HOME=$(mktemp -d) \
+  OPENCMR2_FRAME_HASH=$PWD/build/vr-baseline/flat/hash-a.txt \
+  OPENCMR2_FRAME_DUMP=$PWD/build/vr-baseline/flat/dump-a OPENCMR2_FRAME_DUMP_EVERY=100 \
+  build/linux/tests/stage_probe ~/cmr2game build/vr-baseline/flat/trace-a.jsonl 60 500 \
+  build/vr-baseline/logic/inputs.csv
+```
+Results (two identical runs a/b, 500 ticks, 1851 presented frames, 19 BMPs each):
+- Physics trace a == b == headless reference (cmp identical).
+- Frame hashes: frames 0-980 identical; from 981 (race) 534 of 1851 differ. So hashes alone are NOT a
+  valid flat-mode regression check on this GPU; render has run-to-run noise (cause not investigated; docs
+  mention frame-dependent visual RNG).
+- Noise floor in the dumped frames (a vs b): mean abs diff 0.0003-0.092 / 255, max pixel diff 15-65,
+  up to 11231 pixels over 8 levels. Use a tolerance (e.g. mean < 0.2) when comparing `[vr] enabled = 0` with
+  this baseline; do not expect equal hashes.
+- Frames saved: `build/vr-baseline/flat/dump-{a,b}/frame-NNNNNN.bmp` (local only, not committed).
+- Verified on desktop only. Nothing about phone/goggles.
+
 ## Decisions
 (none yet)
