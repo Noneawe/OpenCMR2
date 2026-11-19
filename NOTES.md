@@ -148,5 +148,37 @@ Open points for Stage 2:
 - Setup screens (`SetupActivity`, folder picker) are touch; do them before putting the phone in goggles.
 - Switching VR on needs editing `opencmr2.ini` for now; live settings are an open Stage 3 decision.
 
+## Stage 3 — cinema mode (3a: fixed settings; no live adjustment yet)
+
+What it does (SDL_GPU renderer only; `[vr] enabled = 1`, CMake `OPENCMR2_VR`, default ON):
+- Game sees one eye as its screen: `Gfx_VrEyeSize` = (desktop W / 2, H) x `render_scale`, even; the display mode list
+  is that single mode (`src/render/gfx_core.cpp`). `Execute()` is unchanged: it renders once into `backColor` (eye size).
+- At present, `ComposeEyes` (`src/render/gfx_gpu.cpp`) draws `backColor` once per eye into its half of the swapchain
+  with `shaders/lens.frag`: shift, margin, lens correction `c + d*f(r)/f(re)` (re at the nearest edge, not the
+  corners), black where the sample is outside the image. Same picture in both eyes. Movies use the same path
+  (`stretch` ignored in VR). HUD/menus are in the same buffer, so they are distorted together.
+- Math in `src/render/vr_layout.h` (pure; `tests/vr_layout.cpp` in ctest), settings in `src/render/vr.cpp`.
+- Gate `Gfx_VrActive()`: needs the build option, `[vr] enabled = 1` and SDL_GPU; with GL/null renderer it logs and stays off.
+- Frame hash/dump in VR save the COMPOSED picture (an extra capture pass, only when `OPENCMR2_FRAME_HASH` is set).
+
+Deviations from CLAUDE.md:
+- Per-pixel lens correction in the fragment shader instead of a 32x32 mesh (same formula, no mesh/vertex buffer).
+  Whether it matches a mesh visually in goggles is not checked.
+- `render_scale` sets the game's video mode, so it needs a restart; lens/shift/margin are read every frame
+  (`Vr_LoadConfig` in `ComposeEyes`) but there is no UI to change them yet (3b: pad combo + save to ini).
+- Not touched: the GL renderer (VR off there), 16 KB alignment (not re-checked after this change).
+
+Verified on desktop (Intel UHD 630, Wayland, Vulkan, 1920x1080 window => 960x1080 eyes, render_scale 0.75 => game 720x810):
+- `ctest --preset linux` 26/26 (new `vr_layout`), `assembleDebug` OK (libmain.so contains the VR code).
+- Physics trace with VR on == headless reference (cmp identical): game logic runs once per frame, unchanged.
+- Eye difference (shift 0, margin 0): left half vs right half of the composed frames: mean 0.0000, max 0 in all
+  18 dumped 1920x1080 frames. (Only proves both eyes get the same image; it does not test the lens.)
+- Looked at two composed frames (boot video, race): picture barrel-distorted, corners black, HUD upright, both
+  eyes equal. The race HUD fits an eye of aspect 0.89 on desktop. Not looked at menus or the cockpit view.
+- Flat mode (VR off) after the change: first 981 frame hashes identical to the baseline; race frames within the
+  noise (mean diff 0.083 vs noise floor 0.092; max pixel 99 vs 65 in the noise run: isolated pixels, not examined).
+Not verified: phone (aspect 1200x1080 per eye, cutout), emulator with game data, goggles (distortion, shift, margin,
+comfort, FPS, heat). Nothing here says the values are good.
+
 ## Decisions
 (none yet)

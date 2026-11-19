@@ -184,6 +184,12 @@ GfxExecutor *Gfx_CreateGlExecutor(void);
 unsigned long long Gfx_PrepareGlWindow(void);
 #endif
 
+// Cardboard/SBS (gfx_core.cpp, render/vr.h): whether the eyes are composed,
+// the game's screen then (one eye) and the window when not fullscreen.
+bool Gfx_VrActive(void);
+void Gfx_VrEyeSize(int *width, int *height);
+void Gfx_VrWindowSize(int *width, int *height);
+
 // Shared by the executors (gfx_core.cpp).
 struct SDL_Window;
 // Fullscreen on the desktop resolution, or a centred window of the back

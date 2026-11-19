@@ -30,7 +30,8 @@ add_test(NAME movie_playback COMMAND movie_playback_test)
 
 add_executable(movie_render_state_test movie_render_state.cpp
     ${PROJECT_SOURCE_DIR}/src/diagnostics/observer.cpp
-    ${PROJECT_SOURCE_DIR}/src/video/movie.cpp ${PROJECT_SOURCE_DIR}/src/render/gfx_core.cpp)
+    ${PROJECT_SOURCE_DIR}/src/video/movie.cpp ${PROJECT_SOURCE_DIR}/src/render/gfx_core.cpp
+    ${PROJECT_SOURCE_DIR}/src/render/vr.cpp)
 target_link_libraries(movie_render_state_test PRIVATE opencmr2_bink SDL3::SDL3)
 add_test(NAME movie_render_state COMMAND movie_render_state_test)
 
@@ -201,3 +202,8 @@ if(WIN32)
         endif()
     endforeach()
 endif()
+
+# Cardboard/SBS layout and lens maths (header only).
+add_executable(vr_layout_test vr_layout.cpp)
+target_include_directories(vr_layout_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME vr_layout COMMAND vr_layout_test)

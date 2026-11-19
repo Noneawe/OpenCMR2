@@ -124,7 +124,7 @@ if(OPENCMR2_SHADERS_MSL OR OPENCMR2_RENDERER_GL)
 endif()
 
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/render/shaders)
-set(SHADER_SOURCES fixed3d.vert fixedtl.vert fixed.frag clear.vert clear.frag)
+set(SHADER_SOURCES fixed3d.vert fixedtl.vert fixed.frag clear.vert clear.frag lens.vert lens.frag)
 set(SHADER_FILES)
 foreach(shader IN LISTS SHADER_SOURCES)
     set(output ${CMAKE_CURRENT_BINARY_DIR}/shaders/${shader}.spv)
@@ -147,7 +147,7 @@ foreach(shader IN LISTS SHADER_SOURCES)
     # The clears of the OpenGL renderer need no shader. GLSL 330 links the
     # vertex shader's outputs to the fragment shader's inputs by name: both
     # are named after their location.
-    if(OPENCMR2_RENDERER_GL AND NOT shader MATCHES "^clear")
+    if(OPENCMR2_RENDERER_GL AND NOT shader MATCHES "^(clear|lens)")
         set(glsl ${CMAKE_CURRENT_BINARY_DIR}/shaders/${shader}.glsl)
         if(shader MATCHES "\\.vert$")
             set(interface out)
@@ -247,6 +247,7 @@ target_link_libraries(opencmr2_platform PRIVATE opencmr2_potrace)
 target_sources(opencmr2_platform PRIVATE
     render/gfx_core.cpp
     render/gfx_gpu.cpp
+    render/vr.cpp
     render/outline_font.cpp
     render/distance_field.cpp
     render/vector_sprite.cpp
@@ -261,6 +262,9 @@ target_sources(opencmr2_platform PRIVATE
 if(OPENCMR2_RENDERER_GL)
     target_sources(opencmr2_platform PRIVATE render/gfx_gl.cpp)
     target_compile_definitions(opencmr2_platform PRIVATE OPENCMR2_RENDERER_GL)
+endif()
+if(OPENCMR2_VR)
+    target_compile_definitions(opencmr2_platform PRIVATE OPENCMR2_VR)
 endif()
 target_include_directories(opencmr2_platform PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${PROJECT_SOURCE_DIR}/third_party/stb)

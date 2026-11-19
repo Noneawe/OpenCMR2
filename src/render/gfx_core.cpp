@@ -4,6 +4,7 @@
 #include "platform/platform.h"
 #include "port/sys.h"
 #include "port/diagnostics.h"
+#include "render/vr.h"
 #include "render/gfx_internal.h"
 
 #include <stdio.h>
@@ -200,6 +201,11 @@ void BuildModes()
     int desktopW, desktopH;
 
     s_modes.clear();
+    if (Gfx_VrActive()) {
+        Gfx_VrEyeSize(&desktopW, &desktopH);
+        s_modes.push_back({ desktopW, desktopH });
+        return;
+    }
     LandscapeDesktopSize(&desktopW, &desktopH);
     auto add = [&](int w, int h) {
         if (w <= desktopW && h <= desktopH &&
@@ -325,6 +331,51 @@ Backend ChooseBackend()
 
 } // namespace
 
+// Cardboard/SBS presentation: built in (OPENCMR2_VR), asked for ([vr] enabled)
+// and possible (only the SDL_GPU renderer composes the eyes). Decided once, as
+// the game's screen size follows from it.
+bool Gfx_VrActive(void)
+{
+    static int active = -1;
+    if (active >= 0)
+        return active != 0;
+    active = 0;
+#ifdef OPENCMR2_VR
+    if (Vr_LoadConfig().enabled) {
+        if (ChooseBackend() == BACKEND_GPU) {
+            active = 1;
+            Sys_Log("gfx: VR on (cinema: the picture shown once per eye)");
+        } else {
+            Sys_Log("gfx: [vr] enabled needs the SDL_GPU renderer: VR off");
+        }
+    }
+#endif
+    return active != 0;
+}
+
+// What the game sees as the screen in VR: one eye's half of the display,
+// scaled by [vr] render_scale (a restart applies a change).
+void Gfx_VrEyeSize(int *width, int *height)
+{
+    int desktopW, desktopH;
+    Sys_GetDesktopSize(&desktopW, &desktopH);
+    if (desktopH > desktopW)
+        std::swap(desktopW, desktopH);
+    const float scale = Vr_LoadConfig().renderScale;
+    *width = std::max(2, (int)(desktopW * 0.5f * scale) & ~1);
+    *height = std::max(2, (int)(desktopH * scale) & ~1);
+}
+
+// The window in VR when not fullscreen: half the desktop in each direction.
+void Gfx_VrWindowSize(int *width, int *height)
+{
+    Sys_GetDesktopSize(width, height);
+    if (*height > *width)
+        std::swap(*width, *height);
+    *width /= 2;
+    *height /= 2;
+}
+
 extern "C" unsigned long long Gfx_PrepareWindow(void)
 {
 #ifdef OPENCMR2_RENDERER_GL
@@ -394,6 +445,10 @@ extern "C" void Gfx_GetDefaultDisplayMode(int *width, int *height)
     // The display's own resolution: the menus, the HUD and the text are
     // scaled to the screen's height, so they stay the same size at any mode,
     // and the 3D picture is as sharp as the display.
+    if (Gfx_VrActive()) {
+        Gfx_VrEyeSize(width, height);
+        return;
+    }
     LandscapeDesktopSize(width, height);
 }
 

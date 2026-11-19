@@ -20,6 +20,7 @@ if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
 endif()
 
 option(OPENCMR2_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
+option(OPENCMR2_VR "Build the Cardboard/SBS presentation (off at run time unless [vr] enabled = 1)" ON)
 option(OPENCMR2_VENDORED_SDL "Download and build SDL3 instead of using an installed one" ${ANDROID})
 
 set(CMAKE_CXX_STANDARD 17)

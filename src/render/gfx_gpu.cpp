@@ -7,6 +7,7 @@
 #include "render/gfx_internal.h"
 
 #include "shaders_spirv.h"
+#include "render/vr.h"
 
 // SPIR-V and, when built, MSL code of one shader for Executor::Shader.
 #ifdef OPENCMR2_SHADERS_MSL
@@ -192,6 +193,13 @@ struct Executor : GfxExecutor {
     SDL_GPUShader *vs3d = nullptr, *vsTL = nullptr, *fs = nullptr, *vsClear = nullptr, *fsClear = nullptr;
     SDL_GPUTexture *backColor = nullptr, *backDepth = nullptr;
     SDL_GPUTexture *backdrop = nullptr;    // the copy of backColor the distance fade reads
+    // Cardboard/SBS (render/vr.h): the eyes are composed from backColor onto
+    // the window with the lens correction (lens.frag).
+    SDL_GPUShader *vsLens = nullptr, *fsLens = nullptr;
+    SDL_GPUSampler *lensSampler = nullptr;
+    std::unordered_map<uint32_t, SDL_GPUGraphicsPipeline *> lensPipelines;   // by target format
+    SDL_GPUTexture *vrCapture = nullptr;   // the composed picture, for the frame hash and dump
+    Uint32 vrCaptureWidth = 0, vrCaptureHeight = 0;
     int backWidth = 0, backHeight = 0;
     SDL_GPUTextureFormat colorFormat = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
     SDL_GPUTextureFormat depthFormat = SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT;
@@ -233,6 +241,12 @@ struct Executor : GfxExecutor {
             SDL_ReleaseGPUGraphicsPipeline(device, p.second);
         for (auto &s : samplers)
             SDL_ReleaseGPUSampler(device, s.second);
+        for (auto &p : lensPipelines)
+            SDL_ReleaseGPUGraphicsPipeline(device, p.second);
+        SDL_ReleaseGPUSampler(device, lensSampler);
+        SDL_ReleaseGPUTexture(device, vrCapture);
+        SDL_ReleaseGPUShader(device, vsLens);
+        SDL_ReleaseGPUShader(device, fsLens);
         SDL_ReleaseGPUTexture(device, backColor);
         SDL_ReleaseGPUTexture(device, backDepth);
         SDL_ReleaseGPUTexture(device, backdrop);
@@ -330,6 +344,17 @@ struct Executor : GfxExecutor {
         fsClear = Shader(SHADER_CODE(clear_frag), SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
         if (!vs3d || !vsTL || !fs || !vsClear || !fsClear)
             return false;
+        if (Gfx_VrActive()) {
+            vsLens = Shader(SHADER_CODE(lens_vert), SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
+            fsLens = Shader(SHADER_CODE(lens_frag), SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+            SDL_GPUSamplerCreateInfo si = {};
+            si.min_filter = si.mag_filter = SDL_GPU_FILTER_LINEAR;
+            si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+            si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+            lensSampler = SDL_CreateGPUSampler(device, &si);
+            if (!vsLens || !fsLens || !lensSampler)
+                return false;
+        }
 
         white2D = CreateTexture(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, 1, 1, 1, 1,
                                 SDL_GPU_TEXTUREUSAGE_SAMPLER);
@@ -396,7 +421,10 @@ struct Executor : GfxExecutor {
 
     void SetFullscreen(bool fullscreen) override
     {
-        Gfx_SetWindowMode(window, fullscreen, backWidth, backHeight);
+        int width = backWidth, height = backHeight;
+        if (Gfx_VrActive())
+            Gfx_VrWindowSize(&width, &height);
+        Gfx_SetWindowMode(window, fullscreen, width, height);
     }
 
     // ---- textures ----
@@ -1376,27 +1404,41 @@ struct Executor : GfxExecutor {
 
         SDL_GPUTexture *swapchain = NULL;
         Uint32 sw = 0, sh = 0;
+        const bool vrOn = vsLens != NULL;
+        SDL_GPUTexture *hashTexture = backColor;
+        int hashWidth = backWidth, hashHeight = backHeight;
         if (SDL_WaitAndAcquireGPUSwapchainTexture(cmd, window, &swapchain, &sw, &sh) && swapchain != NULL) {
             if (sw != presentWidth || sh != presentHeight) {
                 Sys_Log("gfx: %dx%d shown in %ux%u pixels", backWidth, backHeight, sw, sh);
                 presentWidth = sw;
                 presentHeight = sh;
             }
-            // Movie frames fill the drawable; ordinary game frames retain their aspect ratio.
-            PresentationRect rect = GetPresentationRect(backWidth, backHeight, sw, sh, stretch);
-            SDL_GPUBlitInfo blit = {};
-            blit.source.texture = backColor;
-            blit.source.w = backWidth;
-            blit.source.h = backHeight;
-            blit.destination.texture = swapchain;
-            blit.destination.x = rect.x;
-            blit.destination.y = rect.y;
-            blit.destination.w = rect.width;
-            blit.destination.h = rect.height;
-            blit.load_op = SDL_GPU_LOADOP_CLEAR;
-            blit.clear_color = { 0.0f, 0.0f, 0.0f, 1.0f };
-            blit.filter = smoothScaling ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
-            SDL_BlitGPUTexture(cmd, &blit);
+            if (vrOn) {
+                // The composed picture is saved too when frames are hashed.
+                if (Gfx_FrameHashWanted() && EnsureVrCapture(sw, sh)) {
+                    ComposeEyes(cmd, vrCapture, colorFormat, sw, sh);
+                    hashTexture = vrCapture;
+                    hashWidth = (int)sw;
+                    hashHeight = (int)sh;
+                }
+                ComposeEyes(cmd, swapchain, SDL_GetGPUSwapchainTextureFormat(device, window), sw, sh);
+            } else {
+                // Movie frames fill the drawable; ordinary game frames retain their aspect ratio.
+                PresentationRect rect = GetPresentationRect(backWidth, backHeight, sw, sh, stretch);
+                SDL_GPUBlitInfo blit = {};
+                blit.source.texture = backColor;
+                blit.source.w = backWidth;
+                blit.source.h = backHeight;
+                blit.destination.texture = swapchain;
+                blit.destination.x = rect.x;
+                blit.destination.y = rect.y;
+                blit.destination.w = rect.width;
+                blit.destination.h = rect.height;
+                blit.load_op = SDL_GPU_LOADOP_CLEAR;
+                blit.clear_color = { 0.0f, 0.0f, 0.0f, 1.0f };
+                blit.filter = smoothScaling ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+                SDL_BlitGPUTexture(cmd, &blit);
+            }
         }
 
         if (reading != NULL) {
@@ -1405,7 +1447,7 @@ struct Executor : GfxExecutor {
         } else {
             SDL_SubmitGPUCommandBuffer(cmd);
         }
-        HashFrame();
+        HashFrame(hashTexture, hashWidth, hashHeight);
     }
 
     // Takes the reads the GPU has finished, oldest first, so the newest
@@ -1453,20 +1495,88 @@ struct Executor : GfxExecutor {
         return oldest;
     }
 
-    // The back buffer's pixels for Gfx_HashFrame.
-    void HashFrame()
+    SDL_GPUGraphicsPipeline *LensPipeline(SDL_GPUTextureFormat format)
+    {
+        auto it = lensPipelines.find((uint32_t)format);
+        if (it != lensPipelines.end())
+            return it->second;
+        SDL_GPUColorTargetDescription target = {};
+        target.format = format;
+        SDL_GPUGraphicsPipelineCreateInfo info = {};
+        info.vertex_shader = vsLens;
+        info.fragment_shader = fsLens;
+        info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+        info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        info.target_info.color_target_descriptions = &target;
+        info.target_info.num_color_targets = 1;
+        SDL_GPUGraphicsPipeline *p = SDL_CreateGPUGraphicsPipeline(device, &info);
+        if (p == NULL)
+            Sys_Log("gfx: lens pipeline: %s", SDL_GetError());
+        lensPipelines[(uint32_t)format] = p;
+        return p;
+    }
+
+    bool EnsureVrCapture(Uint32 w, Uint32 h)
+    {
+        if (vrCapture == NULL || vrCaptureWidth != w || vrCaptureHeight != h) {
+            SDL_WaitForGPUIdle(device);
+            SDL_ReleaseGPUTexture(device, vrCapture);
+            vrCapture = CreateTexture(SDL_GPU_TEXTURETYPE_2D, colorFormat, (int)w, (int)h, 1, 1,
+                                      SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+            vrCaptureWidth = w;
+            vrCaptureHeight = h;
+        }
+        return vrCapture != NULL;
+    }
+
+    // Draws backColor once per eye into the target (sw x sh pixels): each eye's
+    // picture shifted, shrunk by the margin and pre-distorted for the lens
+    // (render/vr_layout.h), in its own half of the screen, the rest black.
+    // The same picture goes to both eyes: cinema mode.
+    void ComposeEyes(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, SDL_GPUTextureFormat format, Uint32 sw,
+                     Uint32 sh)
+    {
+        SDL_GPUGraphicsPipeline *pipeline = LensPipeline(format);
+        if (pipeline == NULL)
+            return;
+        const VrConfig config = Vr_LoadConfig();
+        SDL_GPUColorTargetInfo color = {};
+        color.texture = target;
+        color.load_op = SDL_GPU_LOADOP_CLEAR;
+        color.store_op = SDL_GPU_STOREOP_STORE;
+        color.clear_color = { 0.0f, 0.0f, 0.0f, 1.0f };
+        SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &color, 1, NULL);
+        SDL_BindGPUGraphicsPipeline(pass, pipeline);
+        SDL_GPUTextureSamplerBinding binding = { backColor, lensSampler };
+        SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+        for (int eye = 0; eye < 2; eye++) {
+            const VrEyeLayout l = Vr_EyeLayout((int)sw, (int)sh, eye, config);
+            SDL_GPUViewport vp = { l.cellX, 0.0f, l.cellW, l.cellH, 0.0f, 1.0f };
+            SDL_Rect scissor = { (int)l.cellX, 0, (int)l.cellW, (int)l.cellH };
+            SDL_SetGPUViewport(pass, &vp);
+            SDL_SetGPUScissor(pass, &scissor);
+            float uniforms[8] = { l.cx, l.cy, l.hw, l.hh, config.k1, config.k2, 0.0f, 0.0f };
+            SDL_PushGPUFragmentUniformData(cmd, 0, uniforms, sizeof(uniforms));
+            SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+        }
+        SDL_EndGPURenderPass(pass);
+    }
+
+    // The picture's pixels for Gfx_HashFrame.
+    void HashFrame(SDL_GPUTexture *texture, int width, int height)
     {
         if (!Gfx_FrameHashWanted())
             return;
-        uint32_t bytes = (uint32_t)backWidth * backHeight * 4;
+        uint32_t bytes = (uint32_t)width * height * 4;
         SDL_GPUTransferBufferCreateInfo tbi = { SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, bytes, 0 };
         SDL_GPUTransferBuffer *tb = SDL_CreateGPUTransferBuffer(device, &tbi);
         SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device);
         SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
         SDL_GPUTextureRegion src = {};
-        src.texture = backColor;
-        src.w = backWidth;
-        src.h = backHeight;
+        src.texture = texture;
+        src.w = width;
+        src.h = height;
         src.d = 1;
         SDL_GPUTextureTransferInfo dst = { tb, 0, 0, 0 };
         SDL_DownloadFromGPUTexture(copy, &src, &dst);
@@ -1474,7 +1584,7 @@ struct Executor : GfxExecutor {
         SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
         SDL_WaitForGPUFences(device, true, &fence, 1);
         SDL_ReleaseGPUFence(device, fence);
-        Gfx_HashFrame((const uint8_t *)SDL_MapGPUTransferBuffer(device, tb, false), backWidth, backHeight);
+        Gfx_HashFrame((const uint8_t *)SDL_MapGPUTransferBuffer(device, tb, false), width, height);
         SDL_UnmapGPUTransferBuffer(device, tb);
         SDL_ReleaseGPUTransferBuffer(device, tb);
     }
