@@ -27,9 +27,13 @@ Result: 25/25 tests pass, `ffb_wheel` skipped.
   Missing: platform 37, NDK 30.0.16248370 (Gradle should download if licenses accepted).
 - Build: `cd android && ANDROID_HOME=~/Android/Sdk ./gradlew assembleDebug` — BUILD SUCCESSFUL (4m44s, Gradle 9.8.1,
   downloaded missing NDK 30 / platform 37). APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
-- Cutout: no `layoutInDisplayCutoutMode` set anywhere (`values/themes.xml` only comments that SDL draws
-  under cutouts). TODO: add `values-v28/styles.xml` with `shortEdges` on `Theme.OpenCMR2.Game`,
-  confirm in log that window size == screen size.
+- Cutout: added `android/app/src/main/res/values-v28/themes.xml` overriding `Theme.OpenCMR2.Game` with
+  `windowLayoutInDisplayCutoutMode=shortEdges`. Builds. NOT verified that window size == screen size:
+  the game activity needs the original game files, which the emulator does not have. TODO check on phone
+  (log window size vs `wm size`).
+- Emulator smoke test (emulator-5554, Android 17, 1080x2400, swiftshader): APK installs, SetupActivity
+  starts and shows "Welcome to OpenCMR2" with no crash in logcat. Game/Vulkan path not exercised.
+  Note: a physical phone was also on adb (wireless); use `adb -s emulator-5554`.
 - 16 KB pages: verified in debug APK. All `.so` (arm64-v8a, x86_64) have LOAD align `0x4000`; `zipalign -c -P 16 4` OK.
   Not tested on a 16 KB device.
 
