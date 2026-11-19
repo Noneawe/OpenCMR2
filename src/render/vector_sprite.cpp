@@ -19,6 +19,9 @@
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #define STBTT_STATIC
+// stb's rasteriser asserts on float rounding in thin outlines; debug builds aborted
+// (stb_truetype.h:3221). Release builds drop it, so do the same everywhere.
+#define STBTT_assert(x) ((void)0)
 #include "stb_truetype.h"
 
 namespace {

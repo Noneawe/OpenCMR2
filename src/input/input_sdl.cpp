@@ -941,26 +941,33 @@ extern "C" void Input_Update(void)
     }
     if (given != NULL)
         s_lastSection = given == &Bindings_TouchProfile() ? "touch" : given->section;
-    // [vr] options on the gamepad: both stick buttons held (render/vr_adjust.h).
-    // While it is open the game gets no input at all.
+    // [vr] options on the gamepad: both stick buttons pressed together open or
+    // close the list (render/vr_adjust.h). While it is open the game gets no input.
     {
-        bool held = false, up = false, down = false, left = false, right = false, reset = false, recenter = false;
-        if (Platform_GetSettingInt("vr.enabled", 0) != 0) {
+        static bool s_vrOpen, s_vrComboPrev;
+        bool combo = false, up = false, down = false, left = false, right = false, reset = false, recenter = false;
+        const bool vr = Platform_GetSettingInt("vr.enabled", 0) != 0;
+        if (vr) {
             for (const InputDevice &device : s_devices) {
                 SDL_Gamepad *pad = device.id != 0 ? device.gamepad : NULL;
-                if (pad == NULL || !SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK) ||
-                    !SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
+                if (pad == NULL)
                     continue;
-                held = true;
-                up = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_UP);
-                down = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-                left = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-                right = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-                reset = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH);
-                recenter = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_NORTH);
-                break;
+                combo = combo || (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+                                  SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK));
+                up = up || SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_UP);
+                down = down || SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+                left = left || SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+                right = right || SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+                reset = reset || SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH);
+                recenter = recenter || SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_NORTH);
             }
         }
+        if (combo && !s_vrComboPrev)
+            s_vrOpen = !s_vrOpen;
+        s_vrComboPrev = combo;
+        if (!vr)
+            s_vrOpen = false;
+        const bool held = s_vrOpen;
         Vr_AdjustUpdate(held, up, down, left, right, reset, recenter, SDL_GetTicks());
         if (Vr_AdjustActive())
             for (Player &player : s_players)

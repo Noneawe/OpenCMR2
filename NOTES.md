@@ -214,12 +214,12 @@ the emulator, goggles (comfort, scale, convergence). GL renderer: no VR.
 
 ## Stage 3b — live adjustment with the gamepad
 
-Hold both stick buttons (L3 + R3) of a gamepad while `[vr] enabled = 1`: all game input goes neutral
+Press both stick buttons (L3 + R3) of a gamepad (a toggle; first built as hold, which cannot be combined with the D-pad on a phone pad) while `[vr] enabled = 1`: all game input goes neutral
 (`src/input/input_sdl.cpp`, after the players are updated), a list of the options is drawn by the port
 (`src/render/vr_adjust.cpp`: own 5x7 font, 33 characters wide, fitted to the eye, recorded as the last draws before
 present from `Gfx_Present`, so it is in both eyes with no parallax and goes through the lens). Up/Down choose
 (shift, margin, lens k1, k2, and in stereo separation, convergence), Left/Right change (hold: after 0.4 s repeat, after
-1.5 s five steps), A restores the starting value. Changes apply on the next frame (read every frame); letting go of the sticks
+1.5 s five steps), A restores the starting value. Changes apply on the next frame (read every frame); pressing L3 + R3 again closes the list and
 writes all six keys to `opencmr2.ini` (`Platform_SetSettingText`). Not live: `render_scale` and `mode` (restart).
 Steps and ranges: `Vr_Params` in `src/render/vr_layout.h`. No change in `game/`.
 
