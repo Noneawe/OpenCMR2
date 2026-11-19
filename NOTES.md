@@ -212,5 +212,24 @@ NOT verified: other camera views (bumper, cockpit; the probe only drives the def
 reflections / shadows per eye, split screen (VR should not use it), GPU cost of the second pass (FPS), the phone,
 the emulator, goggles (comfort, scale, convergence). GL renderer: no VR.
 
+## Stage 3b — live adjustment with the gamepad
+
+Hold both stick buttons (L3 + R3) of a gamepad while `[vr] enabled = 1`: all game input goes neutral
+(`src/input/input_sdl.cpp`, after the players are updated), a list of the options is drawn by the port
+(`src/render/vr_adjust.cpp`: own 5x7 font, 33 characters wide, fitted to the eye, recorded as the last draws before
+present from `Gfx_Present`, so it is in both eyes with no parallax and goes through the lens). Up/Down choose
+(shift, margin, lens k1, k2, and in stereo separation, convergence), Left/Right change (hold: after 0.4 s repeat, after
+1.5 s five steps), A restores the starting value. Changes apply on the next frame (read every frame); letting go of the sticks
+writes all six keys to `opencmr2.ini` (`Platform_SetSettingText`). Not live: `render_scale` and `mode` (restart).
+Steps and ranges: `Vr_Params` in `src/render/vr_layout.h`. No change in `game/`.
+
+Verified on desktop only: `vr_layout` test (steps stay on the grid and in range); a TEMPORARY forced-open run (code
+removed again) rendered the list in both eyes (fits, readable, selection moves, value changes the picture, file saved
+with the new values); `ctest` 26/26; Android `assembleDebug` OK; flat mode first 981 hashes and the physics trace
+unchanged.
+NOT verified: an actual gamepad (L3+R3 combination, D-pad, repeat feel; I could not press real sticks), Android,
+goggles. A stick click can happen by accident; both together should be rare. Cinema mode list hides separation and
+convergence.
+
 ## Decisions
 (none yet)

@@ -87,6 +87,36 @@ inline bool Vr_SampleUV(const VrEyeLayout &l, float k1, float k2, float x, float
 }
 
 
+// The options adjusted in game with the gamepad (render/vr_adjust.cpp), in the
+// order of the on-screen list. stereoOnly ones are skipped in cinema mode.
+struct VrParam {
+    const char *label;      // on screen
+    const char *key;        // in [vr] of opencmr2.ini
+    float min, max, step, def;
+    int decimals;
+    bool stereoOnly;
+};
+
+inline const VrParam *Vr_Params(int *count)
+{
+    static const VrParam params[] = {
+        { "SHIFT", "vr.shift", -0.3f, 0.3f, 0.005f, 0.08f, 3, false },
+        { "MARGIN", "vr.margin", 0.0f, 0.5f, 0.01f, 0.0f, 2, false },
+        { "LENS K1", "vr.lens_k1", -0.5f, 1.0f, 0.01f, 0.176f, 3, false },
+        { "LENS K2", "vr.lens_k2", -0.5f, 1.0f, 0.01f, 0.192f, 3, false },
+        { "SEPARATION", "vr.separation", 0.0f, 0.2f, 0.005f, 0.065f, 3, true },
+        { "CONVERGENCE", "vr.convergence", 1.0f, 100.0f, 0.5f, 10.0f, 1, true },
+    };
+    *count = (int)(sizeof(params) / sizeof(params[0]));
+    return params;
+}
+
+// A parameter after n steps (negative: down), kept in its range and on its grid.
+inline float Vr_StepParam(const VrParam &p, float value, int n)
+{
+    return std::clamp(std::round((value + n * p.step) / p.step) * p.step, p.min, p.max);
+}
+
 // True for a Direct3D perspective projection (row vectors, w = z): the draws
 // that get a stereo offset. 2D, orthographic and anything else stays as it is.
 inline bool Vr_IsPerspective(const float proj[16])

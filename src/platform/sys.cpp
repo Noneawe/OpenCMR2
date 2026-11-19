@@ -370,6 +370,9 @@ const char s_defaultSettings[] =
     "; 1 = goggles mode: the Android touch controls never show (play with a\n"
     "; gamepad), and the game is shown once per eye (SDL_GPU renderer only).\n"
     "enabled = 0\n"
+    "; In game, hold both stick buttons (L3 + R3) of a gamepad: a list of the options below\n"
+    "; opens, Up/Down choose, Left/Right change, A restores the starting value; letting go\n"
+    "; saves them here.\n"
     "; cinema = the same picture in both eyes; stereo = a picture from each eye\n"
     "; (the 3D scene is drawn twice, the HUD and menus are not shifted). Needs a restart.\n"
     "; mode = cinema\n"
@@ -1563,6 +1566,16 @@ extern "C" int Sys_GetOption(const char *name, int fallback)
 extern "C" const char *Sys_GetOptionText(const char *name, const char *fallback)
 {
     return Platform_GetSetting(name, fallback);
+}
+
+bool Platform_SetSettingText(const char *name, const char *value, bool save)
+{
+    std::string key = Lower(name);
+    size_t dot = key.find('.');
+    if (dot == std::string::npos)
+        return false;
+    s_settings[key] = value;
+    return !save || SaveSetting(s_userDir + "opencmr2.ini", key.substr(0, dot), key.substr(dot + 1), value);
 }
 
 extern "C" BOOL Sys_SetOption(const char *name, int value)

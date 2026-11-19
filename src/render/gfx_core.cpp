@@ -5,6 +5,7 @@
 #include "port/sys.h"
 #include "port/diagnostics.h"
 #include "render/vr.h"
+#include "render/vr_adjust.h"
 #include "render/gfx_internal.h"
 
 #include <stdio.h>
@@ -475,6 +476,9 @@ static void Present(BOOL vsync, bool stretch)
         fprintf(trace, "F %u\n", s_traceFrame++);
     if (Diagnostics::observer)
         Diagnostics::observer->BeginPresent();
+    // The list of the [vr] options, while the gamepad holds it open (it is
+    // recorded as the last draws of the frame, in the game's own screen).
+    Vr_AdjustDraw(s_width, s_height);
     if (s_executor != NULL)
         s_executor->Execute(s_frame, s_textures, s_readback, true, vsync != 0, stretch);
     s_frame.Reset();

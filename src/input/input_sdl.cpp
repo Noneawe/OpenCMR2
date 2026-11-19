@@ -4,6 +4,7 @@
 #include "platform/platform.h"
 #include "platform/testing.h"
 #include "port/sys.h"
+#include "render/vr_adjust.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -940,6 +941,30 @@ extern "C" void Input_Update(void)
     }
     if (given != NULL)
         s_lastSection = given == &Bindings_TouchProfile() ? "touch" : given->section;
+    // [vr] options on the gamepad: both stick buttons held (render/vr_adjust.h).
+    // While it is open the game gets no input at all.
+    {
+        bool held = false, up = false, down = false, left = false, right = false, reset = false;
+        if (Platform_GetSettingInt("vr.enabled", 0) != 0) {
+            for (const InputDevice &device : s_devices) {
+                SDL_Gamepad *pad = device.id != 0 ? device.gamepad : NULL;
+                if (pad == NULL || !SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK) ||
+                    !SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
+                    continue;
+                held = true;
+                up = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_UP);
+                down = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+                left = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+                right = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+                reset = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH);
+                break;
+            }
+        }
+        Vr_AdjustUpdate(held, up, down, left, right, reset, SDL_GetTicks());
+        if (Vr_AdjustActive())
+            for (Player &player : s_players)
+                memset(player.values, 0, sizeof(player.values));
+    }
     // Another device for the force feedback is set up as a connection is,
     // in the menus (Input_RescanChangedJoysticks).
     for (int player = 0; player < INPUT_PLAYERS; player++)

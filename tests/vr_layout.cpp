@@ -123,6 +123,20 @@ int main()
     Vr_EyeMatrices(view, proj, 1, sep, conv, vr, pr);
     Check(Near(vl[12] - vr[12], sep), "eyes one separation apart");
 
+    // The in-game adjustment: steps stay on the grid and in range.
+    int count;
+    const VrParam *params = Vr_Params(&count);
+    Check(count == 6, "six adjustable options");
+    for (int i = 0; i < count; i++) {
+        const VrParam &q = params[i];
+        Check(Near(Vr_StepParam(q, q.def, 0), q.def, q.step * 0.01f) || q.def != std::round(q.def / q.step) * q.step,
+              "default on its grid");
+        Check(Vr_StepParam(q, q.max, 5) == q.max && Vr_StepParam(q, q.min, -5) == q.min, "clamped to the range");
+        Check(Vr_StepParam(q, q.def, 1) > q.def || q.def == q.max, "step up");
+        Check(Vr_StepParam(q, q.def, -1) < q.def || q.def == q.min, "step down");
+    }
+    Check(Near(Vr_StepParam(params[0], 0.08f, 1), 0.085f, 1e-5f), "shift steps by 0.005");
+
     printf("vr layout: ok\n");
     return 0;
 }
