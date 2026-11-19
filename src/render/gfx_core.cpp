@@ -344,7 +344,8 @@ bool Gfx_VrActive(void)
     if (Vr_LoadConfig().enabled) {
         if (ChooseBackend() == BACKEND_GPU) {
             active = 1;
-            Sys_Log("gfx: VR on (cinema: the picture shown once per eye)");
+            Sys_Log("gfx: VR on (%s)", Vr_LoadConfig().stereo ? "stereo: the scene drawn once per eye"
+                                                              : "cinema: the picture shown once per eye");
         } else {
             Sys_Log("gfx: [vr] enabled needs the SDL_GPU renderer: VR off");
         }

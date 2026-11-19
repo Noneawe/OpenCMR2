@@ -16,6 +16,11 @@ struct VrConfig {
     float shift = 0.08f;        // 0..0.3, of an eye's half width, towards the screen's middle
     float margin = 0.0f;        // 0..0.5, shrinks each eye's picture, aspect kept
     float renderScale = 0.75f;  // size of the game's screen relative to an eye (needs a restart)
+    // Stereo, in the game's world units (about one metre each, estimated from
+    // one speed reading; see NOTES.md): distance between the eyes, and the
+    // distance of the plane that has no parallax.
+    float separation = 0.065f;
+    float convergence = 10.0f;
 };
 
 // An eye's picture on the screen, in pixels (origin top left).
@@ -31,6 +36,8 @@ inline VrConfig Vr_Clamp(VrConfig c)
     c.shift = std::clamp(c.shift, -0.3f, 0.3f);
     c.margin = std::clamp(c.margin, 0.0f, 0.5f);
     c.renderScale = std::clamp(c.renderScale, 0.25f, 1.0f);
+    c.separation = std::clamp(c.separation, 0.0f, 2.0f);
+    c.convergence = std::max(c.convergence, 0.5f);
     return c;
 }
 
@@ -77,6 +84,36 @@ inline bool Vr_SampleUV(const VrEyeLayout &l, float k1, float k2, float x, float
     *u = 0.5f + dx * ratio / (2.0f * l.hw);
     *v = 0.5f + dy * ratio / (2.0f * l.hh);
     return *u >= 0.0f && *u <= 1.0f && *v >= 0.0f && *v <= 1.0f;
+}
+
+
+// True for a Direct3D perspective projection (row vectors, w = z): the draws
+// that get a stereo offset. 2D, orthographic and anything else stays as it is.
+inline bool Vr_IsPerspective(const float proj[16])
+{
+    return proj[11] == 1.0f && proj[15] == 0.0f;
+}
+
+// One eye's view and projection from the game's (row-major, Direct3D: v' = v M,
+// translation in _41.._43). The eye sits eye * separation / 2 to the right of
+// the camera (eye 0 = left = -1, 1 = right = +1) and looks straight ahead, so
+// the frustum is off-axis, not toed in: the view is moved by -e along x, and
+// the projection's _31 gets e * _11 / convergence, which puts the plane at
+// that distance at the same screen position in both eyes. Nearer objects then
+// shift left in the right eye (crossed disparity: they come out of the
+// screen), farther ones right.
+inline void Vr_EyeMatrices(const float view[16], const float proj[16], int eye, float separation, float convergence,
+                           float outView[16], float outProj[16])
+{
+    const float e = (eye == 0 ? -0.5f : 0.5f) * separation;
+    for (int i = 0; i < 16; i++) {
+        outView[i] = view[i];
+        outProj[i] = proj[i];
+    }
+    // (V * T)_i1 = V_i1 - e * V_i4, T = translation by -e along x.
+    for (int row = 0; row < 4; row++)
+        outView[row * 4] = view[row * 4] - e * view[row * 4 + 3];
+    outProj[8] = proj[8] + e * proj[0] / convergence;
 }
 
 #endif

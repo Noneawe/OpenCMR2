@@ -6,7 +6,7 @@ layout(set = 2, binding = 0) uniform sampler2D eyeImage;
 
 layout(std140, set = 3, binding = 0) uniform LensUniforms {
     vec4 image;     // centre x, y and half width, height of the picture, in screen pixels
-    vec4 lens;      // k1, k2
+    vec4 lens;      // k1, k2, then the x scale and offset of the eye's part of the image (stereo: its half)
 };
 
 layout(location = 0) out vec4 outColor;
@@ -29,5 +29,6 @@ void main()
         outColor = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
+    uv.x = uv.x * lens.z + lens.w;
     outColor = vec4(texture(eyeImage, uv).rgb, 1.0);
 }

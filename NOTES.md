@@ -180,5 +180,37 @@ Verified on desktop (Intel UHD 630, Wayland, Vulkan, 1920x1080 window => 960x108
 Not verified: phone (aspect 1200x1080 per eye, cutout), emulator with game data, goggles (distortion, shift, margin,
 comfort, FPS, heat). Nothing here says the values are good.
 
+## Stage 4 — real stereo
+
+`[vr] mode = stereo` (needs a restart; `separation`, `convergence` read every frame). Implementation in
+`src/render/gfx_gpu.cpp` + `src/render/vr_layout.h`, no change in `game/`:
+- Back buffer textures are 2 x eye width. The game still sees one eye. `Execute()` runs the back buffer's recorded
+  commands twice (loop `eye`), once per half: viewport, scissor and clear rectangles offset by `eye * width`
+  (`ToTarget(..., xOffset)`). Merged leading clears clear the whole texture (both halves). Cube-face reflection
+  targets (phase 0) run once and are shared. Backdrop copy (distance fade) copies the whole texture; the shader reads it
+  at `gl_FragCoord`, so each eye reads its own half.
+- A draw gets the eye's matrices only if it is on the back buffer, not pre-transformed (2D) and its projection is
+  perspective (`_34 == 1`, `_44 == 0`). `Vr_EyeMatrices`: view moved by -e along x (`_41 -= e*_14`), projection
+  `_31 += e*_11/convergence` (off-axis, not toe-in). Lights are transformed with the eye's view (a copy of the draw
+  state), so lighting and fog stay consistent. HUD, menus, sky/backdrop layers, movies are 2D, so no parallax.
+- Present: `lens.frag` samples the eye's half (uniform x scale/offset).
+- Units: the world looks like ~1 unit = 1 metre, estimated from ONE reading (HUD 33 mph in 1st gear vs ~14 units per
+  50 ticks of the trace, if a tick is 1/50 s); not confirmed. So `separation = 0.065` and `convergence = 10` are guesses.
+
+Verified on desktop (same machine as Stage 3, 720x810 game screen, 960x1080 per eye, stage_probe Finland 1):
+- `vr_layout` test: at the convergence distance a point has the same x in both eyes and in the middle view, nearer
+  points go left in the right eye (crossed), farther right, no vertical parallax, separation 0 = same camera. This
+  fixed the sign convention; it is maths, not a look in goggles.
+- Measured in a composed race frame (block matching, separation 0.065 / convergence 10): car body (near) is -9 px in
+  the right eye, far trees +2 px: matches crossed/uncrossed disparity. HUD identical in both eyes.
+- Eye difference, shift 0 / margin 0: `separation = 0`: mean 0.000-0.008, max 1 (menus) to 68 (race: a few
+  pixels, cause not investigated); `separation = 0.065`: race frames mean 1.9-7.1, max up to 236.
+- Physics trace identical to the headless reference with stereo on (game logic still runs once per frame).
+- `ctest --preset linux` 26/26; `assembleDebug` OK; flat mode: first 981 frame hashes identical to the baseline, race
+  frames mean diff 0.075 (noise floor 0.092).
+NOT verified: other camera views (bumper, cockpit; the probe only drives the default chase view), particles /
+reflections / shadows per eye, split screen (VR should not use it), GPU cost of the second pass (FPS), the phone,
+the emulator, goggles (comfort, scale, convergence). GL renderer: no VR.
+
 ## Decisions
 (none yet)

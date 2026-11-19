@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 static void Check(bool ok, const char *message)
 {
@@ -73,6 +74,55 @@ int main()
     bad.renderScale = 0;
     bad = Vr_Clamp(bad);
     Check(bad.shift <= 0.3f && bad.margin <= 0.5f && bad.renderScale >= 0.25f, "clamp");
+    // Stereo: with the eye offset and the off-axis shear, a point at the
+    // convergence distance lands at the same x in both eyes and in the middle
+    // view; a nearer point shifts left in the right eye (crossed disparity)
+    // and right in the left eye; a farther one the other way; y never changes.
+    const float view[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 3, 4, 1 };   // camera at (-2,-3,-4)
+    const float proj[16] = { 1.5f, 0, 0, 0, 0, 2.0f, 0, 0, 0, 0, 1.01f, 1, 0, 0, -0.1f, 0 };
+    Check(Vr_IsPerspective(proj), "perspective");
+    const float ortho[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    Check(!Vr_IsPerspective(ortho), "not perspective");
+    const float sep = 0.065f, conv = 10.0f;
+    auto ndc = [&](int eye, float wx, float wy, float wz, float *y) {
+        float v[16], p[16];
+        if (eye < 0) {
+            for (int i = 0; i < 16; i++) { v[i] = view[i]; p[i] = proj[i]; }
+        } else {
+            Vr_EyeMatrices(view, proj, eye, sep, conv, v, p);
+        }
+        const float vx = wx * v[0] + wy * v[4] + wz * v[8] + v[12];
+        const float vy = wx * v[1] + wy * v[5] + wz * v[9] + v[13];
+        const float vz = wx * v[2] + wy * v[6] + wz * v[10] + v[14];
+        const float cx = vx * p[0] + vy * p[4] + vz * p[8] + p[12];
+        const float cy = vx * p[1] + vy * p[5] + vz * p[9] + p[13];
+        const float cw = vx * p[3] + vy * p[7] + vz * p[11] + p[15];
+        *y = cy / cw;
+        return cx / cw;
+    };
+    float y0, y1, y2;
+    // The camera is at (-2,-3,-4) looking along +z: a point 10 ahead and 1.5 to the side.
+    const float px = -2.0f + 1.5f, py = -3.0f + 0.5f;
+    float xc = ndc(-1, px, py, -4.0f + conv, &y0), xl = ndc(0, px, py, -4.0f + conv, &y1),
+          xr = ndc(1, px, py, -4.0f + conv, &y2);
+    Check(Near(xc, xl, 1e-5f) && Near(xc, xr, 1e-5f), "no parallax at the convergence distance");
+    Check(Near(y0, y1, 1e-6f) && Near(y0, y2, 1e-6f), "no vertical parallax");
+    xl = ndc(0, px, py, -4.0f + 3.0f, &y1);
+    xr = ndc(1, px, py, -4.0f + 3.0f, &y2);
+    Check(xr < xl, "nearer than convergence: crossed disparity");
+    xl = ndc(0, px, py, -4.0f + 40.0f, &y1);
+    xr = ndc(1, px, py, -4.0f + 40.0f, &y2);
+    Check(xr > xl, "farther than convergence: uncrossed disparity");
+    // Zero separation is the middle view.
+    float v0[16], p0[16];
+    Vr_EyeMatrices(view, proj, 1, 0.0f, conv, v0, p0);
+    Check(memcmp(v0, view, sizeof(v0)) == 0 && memcmp(p0, proj, sizeof(p0)) == 0, "separation 0 is the same camera");
+    // The eyes are separation apart along the camera's x axis.
+    float vl[16], pl[16], vr[16], pr[16];
+    Vr_EyeMatrices(view, proj, 0, sep, conv, vl, pl);
+    Vr_EyeMatrices(view, proj, 1, sep, conv, vr, pr);
+    Check(Near(vl[12] - vr[12], sep), "eyes one separation apart");
+
     printf("vr layout: ok\n");
     return 0;
 }

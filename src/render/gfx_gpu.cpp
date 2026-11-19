@@ -200,7 +200,12 @@ struct Executor : GfxExecutor {
     std::unordered_map<uint32_t, SDL_GPUGraphicsPipeline *> lensPipelines;   // by target format
     SDL_GPUTexture *vrCapture = nullptr;   // the composed picture, for the frame hash and dump
     Uint32 vrCaptureWidth = 0, vrCaptureHeight = 0;
-    int backWidth = 0, backHeight = 0;
+    int backWidth = 0, backHeight = 0;     // the game's screen: one eye in stereo
+    // Stereo (render/vr.h, [vr] mode = stereo): the back buffer holds both
+    // eyes side by side, each backWidth wide; the frame's back buffer commands
+    // run once per eye on its half, with the eye's view and projection.
+    bool stereo = false;
+    int texWidth = 0;                      // width of the back buffer's textures
     SDL_GPUTextureFormat colorFormat = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
     SDL_GPUTextureFormat depthFormat = SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT;
     SDL_GPUBuffer *vertexBuffer = nullptr, *indexBuffer = nullptr;
@@ -397,16 +402,19 @@ struct Executor : GfxExecutor {
     {
         if (device == NULL && !CreateDevice())
             return false;
-        if (backColor == NULL || backWidth != width || backHeight != height) {
+        stereo = Gfx_VrActive() && Vr_LoadConfig().stereo;
+        const int wanted = stereo ? 2 * width : width;
+        if (backColor == NULL || backWidth != width || backHeight != height || texWidth != wanted) {
+            texWidth = wanted;
             SDL_WaitForGPUIdle(device);
             SDL_ReleaseGPUTexture(device, backColor);
             SDL_ReleaseGPUTexture(device, backDepth);
             SDL_ReleaseGPUTexture(device, backdrop);
-            backColor = CreateTexture(SDL_GPU_TEXTURETYPE_2D, colorFormat, width, height, 1, 1,
+            backColor = CreateTexture(SDL_GPU_TEXTURETYPE_2D, colorFormat, texWidth, height, 1, 1,
                                       SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-            backDepth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, depthFormat, width, height, 1, 1,
+            backDepth = CreateTexture(SDL_GPU_TEXTURETYPE_2D, depthFormat, texWidth, height, 1, 1,
                                       SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
-            backdrop = CreateTexture(SDL_GPU_TEXTURETYPE_2D, colorFormat, width, height, 1, 1,
+            backdrop = CreateTexture(SDL_GPU_TEXTURETYPE_2D, colorFormat, texWidth, height, 1, 1,
                                      SDL_GPU_TEXTUREUSAGE_SAMPLER);
             backWidth = width;
             backHeight = height;
@@ -802,18 +810,24 @@ struct Executor : GfxExecutor {
 
     // A rectangle of the screen the game draws in (Gfx_SetVirtualScreen) in
     // the back buffer's pixels, within it; elsewhere as it is.
+    // xOffset: the left edge of the eye's half of the back buffer (stereo).
     static GfxViewport ToTarget(const GfxViewport &v, int screenW, int screenH, bool backBuffer, int targetW,
-                                int targetH)
+                                int targetH, int xOffset = 0)
     {
-        if (!backBuffer || screenW <= 0 || screenH <= 0)
+        if (!backBuffer)
             return v;
+        if (screenW <= 0 || screenH <= 0) {
+            GfxViewport r = v;
+            r.x += xOffset;
+            return r;
+        }
         float kx = (float)targetW / screenW, ky = (float)targetH / screenH;
         int x0 = std::clamp((int)lroundf(v.x * kx), 0, targetW);
         int y0 = std::clamp((int)lroundf(v.y * ky), 0, targetH);
         int x1 = std::clamp((int)lroundf((v.x + v.width) * kx), x0, targetW);
         int y1 = std::clamp((int)lroundf((v.y + v.height) * ky), y0, targetH);
         GfxViewport r = v;
-        r.x = x0;
+        r.x = x0 + xOffset;
         r.y = y0;
         r.width = x1 - x0;
         r.height = y1 - y0;
@@ -1222,8 +1236,14 @@ struct Executor : GfxExecutor {
         // scenery after such a split in some sessions (#46). Nothing drawn
         // on the back buffer is read by the drawing into textures.
         GfxTexture *passTarget = NULL;
+        const VrConfig vrConfig = stereo ? Vr_LoadConfig() : VrConfig();
+        int vertexUniformEye = -1;
         for (int phase = 0; phase < 2; phase++) {
+          // The back buffer's commands run once per eye in stereo.
+          for (int eye = 0; eye < (stereo && phase == 1 ? 2 : 1); eye++) {
+            const int xOffset = eye * backWidth;
             target = NULL;
+            vertexUniformState = NULL;
             for (size_t i = 0; i < frame.commands.size(); i++) {
                 const GfxCommand &c = frame.commands[i];
                 if (c.type == GFX_CMD_TARGET) {
@@ -1251,7 +1271,7 @@ struct Executor : GfxExecutor {
                     SDL_GPUTextureLocation src = {}, dst = {};
                     src.texture = backColor;
                     dst.texture = backdrop;
-                    SDL_CopyGPUTextureToTexture(copy, &src, &dst, backWidth, backHeight, 1, false);
+                    SDL_CopyGPUTextureToTexture(copy, &src, &dst, texWidth, backHeight, 1, false);
                     SDL_EndGPUCopyPass(copy);
                     continue;
                 }
@@ -1276,7 +1296,7 @@ struct Executor : GfxExecutor {
                         bound.pipeline = pipeline;
                     }
                     GfxViewport v = ToTarget(c.clearViewport, c.clearScreenW, c.clearScreenH, target == NULL, targetW,
-                                             targetH);
+                                             targetH, xOffset);
                     SDL_GPUViewport vp = { (float)v.x, (float)v.y, (float)v.width, (float)v.height, 0.0f, 1.0f };
                     SDL_Rect scissor = { (int)v.x, (int)v.y, (int)v.width, (int)v.height };
                     SetViewport(pass, bound, vp, scissor);
@@ -1299,20 +1319,33 @@ struct Executor : GfxExecutor {
                     bound.pipeline = pipeline;
                 }
                 const bool scaled = target == NULL && s.screenW > 0 && s.screenH > 0;
-                const GfxViewport viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH);
+                const GfxViewport viewport = ToTarget(s.viewport, s.screenW, s.screenH, target == NULL, targetW, targetH, xOffset);
                 SDL_GPUViewport vp;
                 if (c.transformed)
-                    vp = { 0.0f, 0.0f, (float)targetW, (float)targetH, 0.0f, 1.0f };
+                    vp = { target == NULL ? (float)xOffset : 0.0f, 0.0f, (float)targetW, (float)targetH, 0.0f, 1.0f };
                 else
                     vp = { (float)viewport.x, (float)viewport.y, (float)viewport.width, (float)viewport.height,
                            viewport.minZ, viewport.maxZ };
                 SDL_Rect scissor = { (int)viewport.x, (int)viewport.y, (int)viewport.width, (int)viewport.height };
                 SetViewport(pass, bound, vp, scissor);
+                // Stereo: the 3D draws of the back buffer see the world from the eye.
+                // 2D and everything else stays as the game drew it, so it has no parallax.
+                const int eyeKey = stereo && target == NULL && !c.transformed &&
+                                           Vr_IsPerspective((const float *)&s.projection) ? eye : -1;
                 if (vertexUniformState == NULL || vertexUniformW != targetW || vertexUniformH != targetH ||
-                    vertexUniformScaled != scaled ||
+                    vertexUniformEye != eyeKey || vertexUniformScaled != scaled ||
                     (vertexUniformState != &s && !SameVertexUniforms(*vertexUniformState, s))) {
                     VertexUniforms vu;
-                    FillVertexUniforms(c, s, targetW, targetH, viewport, scaled, vu);
+                    if (eyeKey >= 0) {
+                        GfxDrawState eyeState = s;
+                        Vr_EyeMatrices((const float *)&s.view, (const float *)&s.projection, eyeKey,
+                                       vrConfig.separation, vrConfig.convergence, (float *)&eyeState.view,
+                                       (float *)&eyeState.projection);
+                        FillVertexUniforms(c, eyeState, targetW, targetH, viewport, scaled, vu);
+                    } else {
+                        FillVertexUniforms(c, s, targetW, targetH, viewport, scaled, vu);
+                    }
+                    vertexUniformEye = eyeKey;
                     SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
                     vertexUniformState = &s;
                     vertexUniformW = targetW;
@@ -1352,6 +1385,7 @@ struct Executor : GfxExecutor {
                     SDL_DrawGPUPrimitives(pass, c.vertexCount, 1, firstVertex, 0);
                 }
             }
+          }
             if (pass != NULL) {
                 EndPass(cmd, pass, passTarget);
                 pass = NULL;
@@ -1556,7 +1590,9 @@ struct Executor : GfxExecutor {
             SDL_Rect scissor = { (int)l.cellX, 0, (int)l.cellW, (int)l.cellH };
             SDL_SetGPUViewport(pass, &vp);
             SDL_SetGPUScissor(pass, &scissor);
-            float uniforms[8] = { l.cx, l.cy, l.hw, l.hh, config.k1, config.k2, 0.0f, 0.0f };
+            // Stereo: the eye's half of the back buffer; cinema: all of it, in both eyes.
+            const float uvScale = stereo ? 0.5f : 1.0f, uvOffset = stereo ? 0.5f * eye : 0.0f;
+            float uniforms[8] = { l.cx, l.cy, l.hw, l.hh, config.k1, config.k2, uvScale, uvOffset };
             SDL_PushGPUFragmentUniformData(cmd, 0, uniforms, sizeof(uniforms));
             SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
         }
