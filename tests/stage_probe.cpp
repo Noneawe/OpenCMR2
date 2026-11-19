@@ -603,6 +603,13 @@ int main(int argc, char **argv) {
                     const unsigned at = unsigned(atoi(p));
                     if (raceFrame >= at && raceFrame < at + 6) keys[0x2e] = 0x80;
                 }
+            // The camera type and its projection, when the camera key is in use, to name the frames.
+            if (getenv("OPENCMR2_PROBE_CAMERA_AT_FRAMES") && raceFrame % 20 == 0) {
+                extern int View_GetActiveCameraMode(BYTE index);
+                extern int g_viewNearPlanes[2], g_viewZooms[2];
+                fprintf(stderr, "probe: race frame %u camera type %d zoom %.3f near %.3f\n", raceFrame,
+                        View_GetActiveCameraMode(0), g_viewZooms[0] / 65536.0, g_viewNearPlanes[0] / 65536.0);
+            }
         }
         // Rally Challenge has a bracket confirmation screen inside race
         // resource mode, before any simulation tick can run.

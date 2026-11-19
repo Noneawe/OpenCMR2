@@ -249,5 +249,17 @@ this run; chase view was checked before).
 - Particles, reflections, shadows: nothing odd in the frames above, but no dedicated check (no frame with heavy dust/rain).
 - Not checked: replay/other camera sets, split screen, helicopter/replay views.
 
+### Cockpit and bumper in stereo (checked in detail)
+The probe now also logs the camera type (`OPENCMR2_PROBE_CAMERA_AT_FRAMES` run): cycling with C gives types 4 (chase, start),
+5, 1, 2, 3. Looking at the frames, 5 is the low front view (bonnet edge at the bottom, near plane 0.346), 1/2/3 are three
+in-car views (steering wheel, dash, windshield; near plane 0.1, zoom 0.625). I name them from the pictures, not from the code.
+Grid block matching (cells of 120x100 px with texture, eye 960 px wide, separation 0.065, convergence 10), right eye vs left:
+- bumper (5):   median 0, p10 -23, min -50 px (5% of the eye width).
+- cockpit 1/2/3: median -6..+2, p10 about -95, min -170..-180 px (18-19%): the dash, wheel and A-pillar.
+- Same cockpit with `separation = 0.02`, `convergence = 3`: p10 -26, min -48 px (5%), median 0. Linear in separation, as
+  expected, so it is the lever; the best values need people in goggles.
+No rendering fault seen in any of them (interior parts, windshield roof sticker, HUD equal in both eyes). Not measured: how it
+feels. A 19% disparity is certainly far beyond comfortable fusion on a fixed-focus display; 5% is still large.
+
 ## Decisions
 (none yet)
