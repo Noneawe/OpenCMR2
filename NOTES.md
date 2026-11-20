@@ -339,3 +339,12 @@ Measured on the device (own timers in a throw-away build, not committed):
   the device equal (noise floor). A first desktop test of the cache looked broken: it reused one user dir, whose saved game state changed the run.
 - Next, not done: submission and the GPU run one after the other (Mali renders at the swap), so a render thread would overlap them
   (hypothesis, ~28 ms per frame at best); fewer draw calls.
+
+More R36S measurements (all `stage_probe`, per race frame, median of 19 windows of 60 frames; the display locks frames to 16.7 ms steps):
+- No effect: skipping the distance-fade backdrop copy, depth without stencil, `glInvalidateFramebuffer` of the depth, skipping the readback,
+  drawing the picture to the window with a triangle instead of `BlitFramebuffer` (picture checked equal, no time gained).
+- Skipping the final window pass entirely gives 39 ms, but only because nothing then reads the picture (the driver can drop the work):
+  it shows the CPU side alone (command recording) is ~35-39 ms. Skipping the 156 draws of <= 6 indices: mean 59 -> 47 ms.
+- `glFlush` every 100 draws of the back buffer: mean 57.7 -> 47.7 ms (17 -> 21 fps), every 50 the same, every 200 49.9. Kept.
+- Where the draws come from (race frame 1500, 409 draws): 360 indexed triangle lists of stage geometry, 156 of them <= 6 indices, 29
+  2D (TL) draws. Consecutive draws differ mostly only in the texture (157) or the texture and world matrix (155).

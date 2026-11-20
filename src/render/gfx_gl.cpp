@@ -44,7 +44,7 @@ namespace {
 // ---- functions ----
 
 #ifdef OPENCMR2_RENDERER_GLES
-#define GL_VERSION_FUNCTIONS(X) X(DepthRangef) X(ClearDepthf) X(GetProgramBinary) X(ProgramBinary)
+#define GL_VERSION_FUNCTIONS(X) X(DepthRangef) X(ClearDepthf) X(GetProgramBinary) X(ProgramBinary) X(Flush)
 #else
 #define GL_VERSION_FUNCTIONS(X) X(DepthRange) X(ClearDepth) X(GetTexImage) X(DrawElementsBaseVertex)
 #endif
@@ -1384,6 +1384,9 @@ struct Executor : GfxExecutor {
         int targetW = backWidth, targetH = backHeight;
         BindFramebuffer(backFramebuffer);
         GLintptr boundVertexOffset = -1, boundFragmentOffset = -1;
+#ifdef OPENCMR2_RENDERER_GLES
+        int sinceFlush = 0;
+#endif
         for (size_t i = 0; i < frame.commands.size(); i++) {
             const GfxCommand &c = frame.commands[i];
             if (c.type == GFX_CMD_TARGET) {
@@ -1446,6 +1449,12 @@ struct Executor : GfxExecutor {
             const GLuint vertices = c.buffer != NULL ? ((GlVertexBuffer *)c.buffer->gpu)->buffer : vertexBuffer;
             GLint firstVertex = (GLint)(c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex)));
 #ifdef OPENCMR2_RENDERER_GLES
+            // The Mali driver starts a frame's GPU work only when the frame ends: sent in pieces, the GPU draws the
+            // first while this thread records the rest (a race frame 58 -> 48 ms on the Mali-G31).
+            if (target == NULL && ++sinceFlush >= 100) {
+                gl.Flush();
+                sinceFlush = 0;
+            }
             if (c.firstIndex != ~0u) {
                 BindVertices(vertices, c.transformed, firstVertex);
                 gl.DrawElements(PrimitiveMode(c.primitive), (GLsizei)c.indexCount, GL_UNSIGNED_SHORT,
