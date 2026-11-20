@@ -322,3 +322,20 @@ on the CPU (no BGRA), vertex pointers offset instead of BaseVertex, render targe
 Desktop OpenGL 3.3 and SDL_GPU unchanged (ctest 26/26). Desktop check of the ES build (Mesa ES 3.2, UHD 630, `graphics_api =
 opengl`, stage_probe 500 ticks): trace identical to the flat baseline, 19 dumped frames within mean 0.12/255 of the SDL_GPU
 baseline (race frame looked right). Not checked: the Mali driver itself, speed, S3TC support there (CPU-decoded if absent).
+
+### R36S speed (OpenGL ES mode, Mali-G31, 640x480, Finland 1, stage_probe 500 ticks, `vsync = 0`)
+Measured on the device (own timers in a throw-away build, not committed):
+- Race frame before: 116-128 ms (8.6 fps); about 600 draws and 12.5k indices per frame, no render-target passes.
+- CPU: game logic ~1 ms, command submission ~27 ms (draw calls ~19 ms: ~30 us each), then the wait for the GPU. With `glFinish` per
+  frame: submit ~28 ms + ~22 ms of GPU left. Presentation is locked to the display's 60 Hz even with `vsync = 0` (frames are 16.7 ms multiples).
+- Not the bottleneck: vertex lighting (switching it off changed nothing), render-target passes (none), the backdrop copy (~8 %),
+  vertex count, baseking BaseVertex as 32-bit rebased indices (no change), merging consecutive draws (only ~10 of 600 share a state).
+- The fragment shader was: a trivial one gave 52 ms; fill rate was ~65 ms of the frame.
+- Fix: one fragment program per combination of stage set-up, alpha test, fog and distance fade, those values written into the shader
+  as constants (`SpecialisedProgram`, ES only): race frames 52-65 ms (15-19 fps); at 1/2 and 1/4 of the pixels they stay 52 ms, so pixels
+  no longer matter. Desktop ES frames within 0.13/255 of the SDL_GPU baseline, trace identical.
+- 16 variants take ~3.9 s to compile on the Mali (~250 ms each: visible stutter). They are saved with `glGetProgramBinary` in
+  `<user dir>/shadercache/` (named by a hash of source, `GL_VERSION`, `GL_RENDERER`): warm start 33 ms; frames of a cold and a warm run on
+  the device equal (noise floor). A first desktop test of the cache looked broken: it reused one user dir, whose saved game state changed the run.
+- Next, not done: submission and the GPU run one after the other (Mali renders at the swap), so a render thread would overlap them
+  (hypothesis, ~28 ms per frame at best); fewer draw calls.

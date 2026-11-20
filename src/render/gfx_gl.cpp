@@ -35,6 +35,8 @@
 
 #include <algorithm>
 #include <string>
+#include <array>
+#include <map>
 #include <unordered_map>
 
 namespace {
@@ -42,7 +44,7 @@ namespace {
 // ---- functions ----
 
 #ifdef OPENCMR2_RENDERER_GLES
-#define GL_VERSION_FUNCTIONS(X) X(DepthRangef) X(ClearDepthf)
+#define GL_VERSION_FUNCTIONS(X) X(DepthRangef) X(ClearDepthf) X(GetProgramBinary) X(ProgramBinary)
 #else
 #define GL_VERSION_FUNCTIONS(X) X(DepthRange) X(ClearDepth) X(GetTexImage) X(DrawElementsBaseVertex)
 #endif
@@ -348,17 +350,14 @@ struct Executor : GfxExecutor {
 
     // A program of a vertex shader and the fragment one, its uniform blocks
     // and samplers bound where Execute puts them.
-    GLuint Link(const unsigned char *vertexSource, const unsigned char *fragmentSource)
+    GLuint LinkShaders(GLuint vs, GLuint fs)
     {
-        GLuint vs = Compile(GL_VERTEX_SHADER, vertexSource), fs = Compile(GL_FRAGMENT_SHADER, fragmentSource);
         if (vs == 0 || fs == 0)
             return 0;
         GLuint program = gl.CreateProgram();
         gl.AttachShader(program, vs);
         gl.AttachShader(program, fs);
         gl.LinkProgram(program);
-        gl.DeleteShader(vs);
-        gl.DeleteShader(fs);
         GLint ok = 0;
         gl.GetProgramiv(program, GL_LINK_STATUS, &ok);
         if (!ok) {
@@ -368,14 +367,171 @@ struct Executor : GfxExecutor {
             gl.DeleteProgram(program);
             return 0;
         }
-        gl.UniformBlockBinding(program, gl.GetUniformBlockIndex(program, "VertexUniforms"), VERTEX_BLOCK);
-        gl.UniformBlockBinding(program, gl.GetUniformBlockIndex(program, "FragmentUniforms"), FRAGMENT_BLOCK);
-        gl.UseProgram(program);
-        static const char *const samplerNames[7] = { "tex0", "cube0", "tex1", "cube1", "backdrop", "native0", "native1" };
-        for (int i = 0; i < 7; i++)
-            gl.Uniform1i(gl.GetUniformLocation(program, samplerNames[i]), i);
+        SetUpProgram(program);
         return program;
     }
+
+    // Where a program's uniform blocks and samplers are bound (a program binary does not keep them).
+    void SetUpProgram(GLuint program)
+    {
+        const GLuint vertexBlock = gl.GetUniformBlockIndex(program, "VertexUniforms");
+        const GLuint fragmentBlock = gl.GetUniformBlockIndex(program, "FragmentUniforms");
+        if (vertexBlock != GL_INVALID_INDEX)
+            gl.UniformBlockBinding(program, vertexBlock, VERTEX_BLOCK);
+        if (fragmentBlock != GL_INVALID_INDEX)
+            gl.UniformBlockBinding(program, fragmentBlock, FRAGMENT_BLOCK);
+        gl.UseProgram(program);
+        static const char *const samplerNames[7] = { "tex0", "cube0", "tex1", "cube1", "backdrop", "native0", "native1" };
+        for (int i = 0; i < 7; i++) {
+            const GLint location = gl.GetUniformLocation(program, samplerNames[i]);
+            if (location >= 0)
+                gl.Uniform1i(location, i);
+        }
+        bound.program = 0;
+    }
+
+    GLuint Link(const unsigned char *vertexSource, const unsigned char *fragmentSource)
+    {
+        GLuint vs = Compile(GL_VERTEX_SHADER, vertexSource), fs = Compile(GL_FRAGMENT_SHADER, fragmentSource);
+        GLuint program = LinkShaders(vs, fs);
+#ifdef OPENCMR2_RENDERER_GLES
+        // Kept for the specialised programs.
+        if (vs != 0 && vertexShader3d == 0 && vertexSource == g_fixed3d_vert_glsl)
+            vertexShader3d = vs, vs = 0;
+        else if (vs != 0 && vertexShaderTL == 0 && vertexSource == g_fixedtl_vert_glsl)
+            vertexShaderTL = vs, vs = 0;
+#endif
+        if (vs != 0)
+            gl.DeleteShader(vs);
+        if (fs != 0)
+            gl.DeleteShader(fs);
+        return program;
+    }
+
+#ifdef OPENCMR2_RENDERER_GLES
+    // The fragment shader reads the fixed pipeline's stage set-up from uniforms and branches on it, which
+    // the Mali compiler keeps as it is: a program per set-up of the two stages, the alpha test, the fog and
+    // the distance fade, with those values written into the source as constants, lets it fold the branches.
+    GLuint vertexShader3d = 0, vertexShaderTL = 0;
+    std::string fragmentSource;
+    std::map<std::array<int32_t, 22>, GLuint> specialised;
+    int specialisedFailed = 0;
+
+    // The compiled programs are kept in the user directory (the Mali compiler takes ~250 ms for each),
+    // named by a hash of their source and of the driver.
+    std::string CachePath(const std::string &text, bool transformed)
+    {
+        uint64_t hash = 1469598103934665603ull;
+        for (const std::string &part : { text, std::string(transformed ? "TL" : "3D"),
+                                         std::string((const char *)gl.GetString(GL_VERSION)),
+                                         std::string((const char *)gl.GetString(GL_RENDERER)) })
+            for (unsigned char ch : part)
+                hash = (hash ^ ch) * 1099511628211ull;
+        char name[32];
+        snprintf(name, sizeof(name), "%016llx.bin", (unsigned long long)hash);
+        return std::string(Platform_GetUserDir()) + "shadercache/" + name;
+    }
+
+    GLuint LoadCachedProgram(const std::string &path)
+    {
+        size_t size = 0;
+        void *data = SDL_LoadFile(path.c_str(), &size);
+        GLuint program = 0;
+        if (data != NULL && size > 4) {
+            GLenum format;
+            memcpy(&format, data, 4);
+            program = gl.CreateProgram();
+            gl.ProgramBinary(program, format, (const char *)data + 4, (GLsizei)(size - 4));
+            GLint ok = 0;
+            gl.GetProgramiv(program, GL_LINK_STATUS, &ok);
+            if (ok) {
+                SetUpProgram(program);
+            } else {
+                gl.DeleteProgram(program);
+                program = 0;
+            }
+        }
+        SDL_free(data);
+        return program;
+    }
+
+    void SaveCachedProgram(GLuint program, const std::string &path)
+    {
+        GLint length = 0;
+        gl.GetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &length);
+        if (length <= 0)
+            return;
+        std::vector<char> file(4 + (size_t)length);
+        GLsizei written = 0;
+        GLenum format = 0;
+        gl.GetProgramBinary(program, length, &written, &format, file.data() + 4);
+        memcpy(file.data(), &format, 4);
+        SDL_CreateDirectory((std::string(Platform_GetUserDir()) + "shadercache").c_str());
+        if (written > 0)
+            SDL_SaveFile(path.c_str(), file.data(), 4 + (size_t)written);
+    }
+
+    GLuint SpecialisedProgram(bool transformed, const FragmentUniforms &fu)
+    {
+        std::array<int32_t, 22> key;
+        int n = 0;
+        for (int i = 0; i < 4; i++) key[n++] = fu.stage0[i];
+        for (int i = 0; i < 4; i++) key[n++] = fu.stage0b[i];
+        for (int i = 0; i < 4; i++) key[n++] = fu.stage1[i];
+        for (int i = 0; i < 4; i++) key[n++] = fu.stage1b[i];
+        key[n++] = fu.alphaTest[0];
+        key[n++] = fu.alphaTest[1];
+        key[n++] = fu.fogMode[0];
+        key[n++] = fu.fogMode[1];
+        key[n++] = fu.fogMode[2] | (fu.distanceFade[2] != 0.0f ? 8 : 0) | (transformed ? 16 : 0);
+        key[n++] = fu.fogMode[3];
+        auto it = specialised.find(key);
+        if (it != specialised.end())
+            return it->second;
+        const uint64_t start = SDL_GetTicksNS();
+        std::string text = fragmentSource;
+        const size_t block = text.find("uniform FragmentUniforms");
+        const size_t close = block == std::string::npos ? block : text.find("} ", block);
+        GLuint program = 0;
+        if (close != std::string::npos) {
+            const size_t nameStart = close + 2, nameEnd = text.find(';', nameStart);
+            const std::string instance = text.substr(nameStart, nameEnd - nameStart);
+            struct Member { const char *name; const int32_t *values; };
+            const Member members[] = { { "stage0", fu.stage0 }, { "stage0b", fu.stage0b }, { "stage1", fu.stage1 },
+                                       { "stage1b", fu.stage1b }, { "alphaTest", fu.alphaTest }, { "fogMode", fu.fogMode } };
+            const char *const components = "xyzw";
+            for (const Member &m : members)
+                for (int c = 0; c < 4; c++) {
+                    const std::string pattern = instance + "." + m.name + "." + components[c];
+                    const std::string value = "(" + std::to_string(m.values[c]) + ")";
+                    for (size_t at = text.find(pattern); at != std::string::npos; at = text.find(pattern, at + value.size()))
+                        text.replace(at, pattern.size(), value);
+                }
+            const std::string fade = instance + ".distanceFade.z";
+            for (size_t at = text.find(fade); at != std::string::npos; at = text.find(fade, at + 3))
+                text.replace(at, fade.size(), fu.distanceFade[2] != 0.0f ? "1.0" : "0.0");
+            const std::string path = CachePath(text, transformed);
+            program = LoadCachedProgram(path);
+            if (program == 0) {
+                GLuint fs = Compile(GL_FRAGMENT_SHADER, (const unsigned char *)text.c_str());
+                if (fs != 0) {
+                    program = LinkShaders(transformed ? vertexShaderTL : vertexShader3d, fs);
+                    gl.DeleteShader(fs);
+                    if (program != 0)
+                        SaveCachedProgram(program, path);
+                }
+            }
+        }
+        if (program == 0) {
+            specialisedFailed++;
+            program = transformed ? programTL : program3d;
+        }
+        specialised[key] = program;
+        Sys_Log("gfx: shader variant %d ready in %.0f ms", (int)specialised.size(), (SDL_GetTicksNS() - start) / 1e6);
+        return program;
+    }
+#endif
+
 
     bool HasExtension(const char *name)
     {
@@ -444,6 +600,9 @@ struct Executor : GfxExecutor {
 
         program3d = Link(g_fixed3d_vert_glsl, g_fixed_frag_glsl);
         programTL = Link(g_fixedtl_vert_glsl, g_fixed_frag_glsl);
+#ifdef OPENCMR2_RENDERER_GLES
+        fragmentSource = (const char *)g_fixed_frag_glsl;
+#endif
         if (program3d == 0 || programTL == 0)
             return false;
         white2D = WhiteTexture(GL_TEXTURE_2D);
@@ -1256,6 +1415,11 @@ struct Executor : GfxExecutor {
             }
             const GfxDrawState &s = frame.states[c.state];
             GLuint program = c.transformed ? programTL : program3d;
+#ifdef OPENCMR2_RENDERER_GLES
+            if (drawUniforms[i].fragmentOffset >= 0)
+                program = SpecialisedProgram(c.transformed,
+                                             *(const FragmentUniforms *)(uniformData.data() + drawUniforms[i].fragmentOffset));
+#endif
             if (bound.program != program) {
                 gl.UseProgram(program);
                 bound.program = program;
