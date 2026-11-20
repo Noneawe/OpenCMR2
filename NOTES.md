@@ -371,3 +371,9 @@ Race frame (all of the above, `vsync = 0`): 38.8 ms = game 5.8 + executor on the
 so it was not built. Merging the blended foliage: 185 draws, 175 from static buffers (vertices cannot be baked on the CPU), only 17 adjacent pairs differ in the
 world matrix alone: not worth it. `glGetString(GL_EXTENSIONS)` on the Mali: no S3TC (BC1/BC3 are decoded on the CPU), has ASTC LDR, ARM_shader_framebuffer_fetch,
 EXT_texture_format_BGRA8888, EXT_disjoint_timer_query (measured 0.4 ms for 39 ms frames: no use). Memory: 918 MB, no swap, MemAvailable never below ~590 MB in a race.
+
+libc's 15 % of the CPU in a race (sampler with the caller: the link register, which is the caller of a leaf such as memcpy): 6.9 % of all samples are inside
+the Mali driver itself (its own copies; nothing to change from here except giving it less data), 2.6 % libc inside libc (malloc and friends), 1.1 % libdrm (the
+page flip), and only ~3 % from this program: the executor's `memset`/`memcmp` (1.7 %), vector inserts of the recorded frame (1 %), `RecordDraw` (0.6 %), i.e.
+~0.7 ms of a 22 ms CPU frame. Not worth a change (the vertex uniform block is 1.4 KB per distinct state, 8 lights of it; splitting it would save ~1 ms and touches the
+SDL_GPU shader too).

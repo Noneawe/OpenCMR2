@@ -12,9 +12,10 @@ import sys
 samples_path, maps_path, exe = sys.argv[1:4]
 nm = sys.argv[4] if len(sys.argv) > 4 else "nm"
 top = int(sys.argv[5]) if len(sys.argv) > 5 else 40
-pcs = array.array("Q")
+words = array.array("Q")
 with open(samples_path, "rb") as f:
-    pcs.frombytes(f.read())
+    words.frombytes(f.read())
+pcs, callers = words[0::2], words[1::2]
 regions = []
 for line in open(maps_path):
     parts = line.split()
@@ -30,20 +31,29 @@ for line in subprocess.run([nm, "-C", "-n", "--defined-only", exe], capture_outp
         symbols.append((int(parts[0], 16), parts[2]))
 addresses = [a for a, _ in symbols]
 counts = collections.Counter()
-for pc in pcs:
+via = collections.defaultdict(collections.Counter)   # a library -> the functions of the program that called it
+base = min(r[0] - r[2] for r in regions if r[3].endswith(exe_name))
+def where(pc):
     for lo, hi, offset, path in regions:
         if lo <= pc < hi:
             if path.endswith(exe_name):
-                # PIE: the first executable mapping of the file gives the load base.
-                base = min(r[0] - r[2] for r in regions if r[3].endswith(exe_name))
                 i = bisect.bisect_right(addresses, pc - base) - 1
-                counts[symbols[i][1] if i >= 0 else "?"] += 1
-            else:
-                counts["[" + path.rsplit("/", 1)[-1] + "]"] += 1
-            break
-    else:
-        counts["[unknown]"] += 1
+                return symbols[i][1] if i >= 0 else "?", True
+            return "[" + path.rsplit("/", 1)[-1] + "]", False
+    return "[unknown]", False
+for pc, caller in zip(pcs, callers):
+    name, inside = where(pc)
+    counts[name] += 1
+    if not inside:
+        who, in_exe = where(caller)
+        via[name][who] += 1
 total = sum(counts.values())
 print(f"{total} samples")
 for name, n in counts.most_common(top):
     print(f"{100 * n / total:5.1f}%  {n:7d}  {name[:110]}")
+
+for lib in ("[libc-2.30.so]", "[libmali-bifrost-g31-rxp0-gbm.so]"):
+    if lib in via:
+        print(f"\ncalled from, for {lib} ({sum(via[lib].values())} samples; the link register: a leaf's caller):")
+        for name, n in via[lib].most_common(12):
+            print(f"{100 * n / total:5.1f}%  {n:7d}  {name[:110]}")

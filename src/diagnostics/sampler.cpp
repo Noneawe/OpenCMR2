@@ -14,7 +14,7 @@
 namespace Diagnostics {
 #ifdef OPENCMR2_SAMPLER
 static const char *samplePath;
-static const size_t capacity = 1 << 20;
+static const size_t capacity = 1 << 20;   // samples of two words: where it was, and who called (aarch64: the link register)
 static uintptr_t *samples;
 static volatile size_t used;
 static uint64_t lastWrite;
@@ -23,12 +23,15 @@ static void OnTimer(int, siginfo_t *, void *context)
 {
     const ucontext_t *uc = (const ucontext_t *)context;
 #if defined(__aarch64__)
-    const uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
+    const uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc, caller = (uintptr_t)uc->uc_mcontext.regs[30];
 #else
-    const uintptr_t pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+    const uintptr_t pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP], caller = 0;
 #endif
-    if (used < capacity)
-        samples[used++] = pc;
+    if (used < capacity) {
+        samples[used * 2] = pc;
+        samples[used * 2 + 1] = caller;
+        used++;
+    }
 }
 
 static void Write()
@@ -36,7 +39,7 @@ static void Write()
     if (!samplePath)
         return;
     if (FILE *file = fopen(samplePath, "wb")) {
-        fwrite(samples, sizeof(uintptr_t), used, file);
+        fwrite(samples, 2 * sizeof(uintptr_t), used, file);
         fclose(file);
     }
     const std::string maps = std::string(samplePath) + ".maps";
@@ -59,7 +62,7 @@ void StartSamplerFromEnvironment()
         samplePath = samples ? samplePath : nullptr;
         return;
     }
-    samples = (uintptr_t *)malloc(capacity * sizeof(uintptr_t));
+    samples = (uintptr_t *)malloc(capacity * 2 * sizeof(uintptr_t));
     struct sigaction action = {};
     action.sa_sigaction = OnTimer;
     action.sa_flags = SA_SIGINFO | SA_RESTART;
