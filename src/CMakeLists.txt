@@ -98,6 +98,11 @@ else()
     set(OPENCMR2_RENDERER_GL_DEFAULT ON)
 endif()
 option(OPENCMR2_RENDERER_GL "Build the OpenGL 3.3 renderer" ${OPENCMR2_RENDERER_GL_DEFAULT})
+# The same renderer on OpenGL ES 3.0 instead (ARM handhelds whose driver has no desktop OpenGL).
+option(OPENCMR2_RENDERER_GLES "Make the OpenGL renderer an OpenGL ES 3.0 one" OFF)
+if(OPENCMR2_RENDERER_GLES)
+    set(OPENCMR2_RENDERER_GL ON)
+endif()
 # Recent glslang releases use glslang.exe; older packages keep glslangValidator.
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator glslang REQUIRED)
 if(OPENCMR2_SHADERS_MSL OR OPENCMR2_RENDERER_GL)
@@ -155,15 +160,26 @@ foreach(shader IN LISTS SHADER_SOURCES)
             set(interface in)
         endif()
         set(renames)
-        foreach(location RANGE 5)
+        # OpenGL ES links by name only: the eye position (location 6) needs one too.
+        if(OPENCMR2_RENDERER_GLES)
+            set(lastLocation 6)
+        else()
+            set(lastLocation 5)
+        endif()
+        foreach(location RANGE ${lastLocation})
             list(APPEND renames --rename-interface-variable ${interface} ${location} varying${location})
         endforeach()
+        if(OPENCMR2_RENDERER_GLES)
+            set(glslVersion --version 300 --es)
+        else()
+            set(glslVersion --version 330 --no-es --no-420pack-extension)
+        endif()
         add_custom_command(
             OUTPUT ${glsl}
-            COMMAND ${SPIRV_CROSS} --version 330 --no-es --no-420pack-extension --flip-vert-y --fixup-clipspace
+            COMMAND ${SPIRV_CROSS} ${glslVersion} --flip-vert-y --fixup-clipspace
                 ${renames} --output ${glsl} ${output}
             DEPENDS ${output}
-            COMMENT "Translating shader ${shader} to GLSL 330")
+            COMMENT "Translating shader ${shader} to GLSL")
         list(APPEND SHADER_FILES ${glsl})
     endif()
 endforeach()
@@ -264,6 +280,9 @@ target_sources(opencmr2_platform PRIVATE
 if(OPENCMR2_RENDERER_GL)
     target_sources(opencmr2_platform PRIVATE render/gfx_gl.cpp)
     target_compile_definitions(opencmr2_platform PRIVATE OPENCMR2_RENDERER_GL)
+    if(OPENCMR2_RENDERER_GLES)
+        target_compile_definitions(opencmr2_platform PRIVATE OPENCMR2_RENDERER_GLES)
+    endif()
 endif()
 if(OPENCMR2_VR)
     target_compile_definitions(opencmr2_platform PRIVATE OPENCMR2_VR)

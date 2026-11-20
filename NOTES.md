@@ -312,3 +312,13 @@ Result: needs glibc 2.30 at most (ArkOS 19.10 has 2.30), libstdc++ static, SDL3 
 loaded at run time). Run under qemu-aarch64 with the dummy video driver: starts and reports missing game data. Not
 checked: OpenGL on Panfrost (reports 3.1; the launcher sets `MESA_GL_VERSION_OVERRIDE=3.3`), speed on 4x Cortex-A35 and 1 GB,
 pad mapping, the 640x480 screen.
+
+### R36S: OpenGL ES 3.0 mode (`-DOPENCMR2_RENDERER_GLES=ON`)
+First R36S run failed: `Couldn't find matching EGL config`. The console (ArkOS, kernel 4.4) uses the Mali blob (`libEGL.so.1` ->
+`libMali.so`, `libmali-bifrost-g31`): OpenGL ES only, no desktop OpenGL, no Vulkan ICD. Mesa 19.2 there is software only.
+`gfx_gl.cpp` got an ES build of the same executor: ES 3.0 context, shaders through `spirv-cross --es --version 300` (all
+varyings renamed incl. location 6; default float precision forced to highp at compile time), RGBA uploads with red/blue swapped
+on the CPU (no BGRA), vertex pointers offset instead of BaseVertex, render targets read through their framebuffer.
+Desktop OpenGL 3.3 and SDL_GPU unchanged (ctest 26/26). Desktop check of the ES build (Mesa ES 3.2, UHD 630, `graphics_api =
+opengl`, stage_probe 500 ticks): trace identical to the flat baseline, 19 dumped frames within mean 0.12/255 of the SDL_GPU
+baseline (race frame looked right). Not checked: the Mali driver itself, speed, S3TC support there (CPU-decoded if absent).

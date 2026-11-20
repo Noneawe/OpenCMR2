@@ -1,6 +1,11 @@
 // The OpenGL 3.3 executor: runs a recorded frame (gfx_core.cpp) as the
 // SDL_GPU one does (gfx_gpu.cpp), with its shaders translated to GLSL 330
 // (src/CMakeLists.txt), on GPUs without Vulkan or Direct3D 12.
+// With OPENCMR2_RENDERER_GLES it is the same code on OpenGL ES 3.0, for drivers
+// that have no desktop OpenGL (the Mali blob of ARM handhelds): textures are
+// uploaded as RGBA (red and blue swapped on the CPU, ES has no BGRA), vertices
+// are given a base by their pointers (no BaseVertex before ES 3.2) and
+// render targets are read through their framebuffers (no GetTexImage).
 //
 // Images keep Direct3D's rows: the shaders draw upside down, so the first
 // row of every target is its top, as in the textures the game uploads and
@@ -17,8 +22,13 @@
 
 // Declarations only: every function is loaded through SDL (Gl::Load), and
 // these give the types of its pointers.
+#ifdef OPENCMR2_RENDERER_GLES
+#include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
+#else
 #define GL_GLEXT_PROTOTYPES
 #include <SDL3/SDL_opengl.h>
+#endif
 
 #include <math.h>
 #include <string.h>
@@ -31,16 +41,23 @@ namespace {
 
 // ---- functions ----
 
+#ifdef OPENCMR2_RENDERER_GLES
+#define GL_VERSION_FUNCTIONS(X) X(DepthRangef) X(ClearDepthf)
+#else
+#define GL_VERSION_FUNCTIONS(X) X(DepthRange) X(ClearDepth) X(GetTexImage) X(DrawElementsBaseVertex)
+#endif
+
 #define GL_FUNCTIONS(X)                                                                                         \
+    GL_VERSION_FUNCTIONS(X)                                                                                     \
     X(GetString) X(GetStringi) X(GetIntegerv) X(GetFloatv) X(GetError) X(Enable) X(Disable) X(Viewport) X(Scissor)          \
-    X(DepthRange) X(ClearColor) X(ClearDepth) X(Clear) X(ColorMask) X(DepthMask) X(DepthFunc) X(BlendFunc)    \
+    X(ClearColor) X(Clear) X(ColorMask) X(DepthMask) X(DepthFunc) X(BlendFunc)    \
     X(CullFace) X(FrontFace) X(PixelStorei) X(ReadPixels) X(Finish)                                           \
     X(GenTextures) X(DeleteTextures) X(BindTexture) X(ActiveTexture) X(TexImage2D) X(TexSubImage2D)           \
-    X(CompressedTexImage2D) X(TexParameteri) X(GetTexImage) X(CopyTexSubImage2D)                              \
+    X(CompressedTexImage2D) X(TexParameteri) X(CopyTexSubImage2D)                                             \
     X(GenSamplers) X(DeleteSamplers) X(BindSampler) X(SamplerParameteri) X(SamplerParameterf)                 \
     X(GenBuffers) X(DeleteBuffers) X(BindBuffer) X(BufferData) X(BindBufferRange) X(MapBufferRange)           \
     X(UnmapBuffer) X(GenVertexArrays) X(DeleteVertexArrays) X(BindVertexArray) X(EnableVertexAttribArray)      \
-    X(VertexAttribPointer) X(DrawArrays) X(DrawElementsBaseVertex)                                             \
+    X(VertexAttribPointer) X(DrawArrays) X(DrawElements)                                                       \
     X(GenFramebuffers) X(DeleteFramebuffers) X(BindFramebuffer) X(FramebufferTexture2D)                        \
     X(FramebufferRenderbuffer) X(CheckFramebufferStatus) X(BlitFramebuffer) X(GenRenderbuffers)                \
     X(DeleteRenderbuffers) X(BindRenderbuffer) X(RenderbufferStorage)                                          \
@@ -70,6 +87,38 @@ struct Gl {
 };
 
 Gl gl;
+
+#ifdef OPENCMR2_RENDERER_GLES
+const GLenum PIXEL_FORMAT = GL_RGBA;   // memory order of the pixels as handed to OpenGL
+// BGRA <-> RGBA, in place.
+void SwapRedBlue(void *pixels, size_t count)
+{
+    uint32_t *p = (uint32_t *)pixels;
+    for (size_t i = 0; i < count; i++)
+        p[i] = (p[i] & 0xff00ff00u) | (p[i] & 0xff) << 16 | (p[i] >> 16 & 0xff);
+}
+#else
+const GLenum PIXEL_FORMAT = GL_BGRA;
+void SwapRedBlue(void *, size_t) {}
+#endif
+
+void SetDepthRange(float n, float f)
+{
+#ifdef OPENCMR2_RENDERER_GLES
+    gl.DepthRangef(n, f);
+#else
+    gl.DepthRange(n, f);
+#endif
+}
+
+void SetClearDepth(float z)
+{
+#ifdef OPENCMR2_RENDERER_GLES
+    gl.ClearDepthf(z);
+#else
+    gl.ClearDepth(z);
+#endif
+}
 
 // ---- uniform blocks (std140, as gfx_gpu.cpp's) ----
 
@@ -236,6 +285,7 @@ struct Executor : GfxExecutor {
     // The state set in OpenGL, so that draws change only what differs.
     struct Bound {
         GLuint program = 0, framebuffer = ~0u, vertices = ~0u;
+        GLint base = 0;
         bool transformed = false;
         int blend = -1, srcBlend = -1, destBlend = -1, depthTest = -1, depthWrite = -1, depthFunc = -1, cull = -1;
         GLint viewport[4] = { -1, -1, -1, -1 }, scissor[4] = { -1, -1, -1, -1 };
@@ -273,6 +323,15 @@ struct Executor : GfxExecutor {
     {
         GLuint shader = gl.CreateShader(stage);
         const char *text = (const char *)source;
+#ifdef OPENCMR2_RENDERER_GLES
+        // spirv-cross leaves the fragment shader's default float precision at mediump
+        // (16 bits on Mali): the fixed pipeline's lighting and fog need 32.
+        std::string highp = text;
+        const size_t at = highp.find("precision mediump float;");
+        if (at != std::string::npos)
+            highp.replace(at, 24, "precision highp float;");
+        text = highp.c_str();
+#endif
         gl.ShaderSource(shader, 1, &text, NULL);
         gl.CompileShader(shader);
         GLint ok = 0;
@@ -336,10 +395,10 @@ struct Executor : GfxExecutor {
         gl.BindTexture(target, texture);
         if (target == GL_TEXTURE_CUBE_MAP) {
             for (int face = 0; face < 6; face++)
-                gl.TexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA8, 1, 1, 0, GL_BGRA, GL_UNSIGNED_BYTE,
+                gl.TexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA8, 1, 1, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE,
                               &white);
         } else {
-            gl.TexImage2D(target, 0, GL_RGBA8, 1, 1, 0, GL_BGRA, GL_UNSIGNED_BYTE, &white);
+            gl.TexImage2D(target, 0, GL_RGBA8, 1, 1, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, &white);
         }
         gl.TexParameteri(target, GL_TEXTURE_MAX_LEVEL, 0);
         return texture;
@@ -364,10 +423,17 @@ struct Executor : GfxExecutor {
         gl.GetIntegerv(GL_MINOR_VERSION, &minor);
         Sys_Log("gfx: OpenGL %d.%d, %s (%s)", (int)major, (int)minor, (const char *)gl.GetString(GL_RENDERER),
                 (const char *)gl.GetString(GL_VERSION));
+#ifdef OPENCMR2_RENDERER_GLES
+        if (major < 3) {
+            Sys_Log("gfx: OpenGL ES 3.0 is needed");
+            return false;
+        }
+#else
         if (major < 3 || (major == 3 && minor < 3)) {
             Sys_Log("gfx: OpenGL 3.3 is needed");
             return false;
         }
+#endif
         anisotropy = Platform_GetSettingInt("video.anisotropy", 1);
         smoothScaling = Platform_GetSettingInt("video.smooth_scaling", 1);
         bcSupported = HasExtension("GL_EXT_texture_compression_s3tc");
@@ -417,10 +483,10 @@ struct Executor : GfxExecutor {
                 gl.GenRenderbuffers(1, &backDepth);
             }
             gl.BindTexture(GL_TEXTURE_2D, backdrop);
-            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
             gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
             gl.BindTexture(GL_TEXTURE_2D, backColor);
-            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
             gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
             gl.BindRenderbuffer(GL_RENDERBUFFER, backDepth);
             gl.RenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
@@ -517,6 +583,7 @@ struct Executor : GfxExecutor {
             memcpy(dst, src, n * 4);
             break;
         }
+        SwapRedBlue(dst, n);
     }
 
     // Every level of every face of a texture from its CPU copy.
@@ -536,16 +603,16 @@ struct Executor : GfxExecutor {
                 int w = std::max(1, t->width >> m), h = std::max(1, t->height >> m);
                 const std::vector<uint8_t> &cpu = t->levels[f][m];
                 if (cpu.empty()) {
-                    gl.TexImage2D(face, m, GL_RGBA8, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+                    gl.TexImage2D(face, m, GL_RGBA8, w, h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
                     continue;
                 }
                 ConvertLevel(t, g, cpu.data(), w, h, level);
                 if (g->compressed)
                     gl.CompressedTexImage2D(face, m, compressedFormat, w, h, 0, (GLsizei)level.size(), level.data());
                 else if (g->specified)
-                    gl.TexSubImage2D(face, m, 0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, level.data());
+                    gl.TexSubImage2D(face, m, 0, 0, w, h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, level.data());
                 else
-                    gl.TexImage2D(face, m, GL_RGBA8, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, level.data());
+                    gl.TexImage2D(face, m, GL_RGBA8, w, h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, level.data());
             }
         }
         g->specified = true;
@@ -588,9 +655,19 @@ struct Executor : GfxExecutor {
         gl.ActiveTexture(GL_TEXTURE0);
         gl.BindTexture(cube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D, g->texture);
         InvalidateTextureBinding();
+#ifdef OPENCMR2_RENDERER_GLES
+        // No GetTexImage: read through the target's framebuffer.
+        for (int f = 0; f < (cube ? 6 : 1); f++) {
+            GfxTexture *face = cube ? t->faceViews[f] != NULL ? t->faceViews[f] : t : t;
+            BindFramebuffer(Framebuffer(face));
+            gl.ReadPixels(0, 0, t->width, t->height, PIXEL_FORMAT, GL_UNSIGNED_BYTE, t->levels[f][0].data());
+            SwapRedBlue(t->levels[f][0].data(), (size_t)t->width * t->height);
+        }
+#else
         for (int f = 0; f < (cube ? 6 : 1); f++)
-            gl.GetTexImage(cube ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + f : GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE,
+            gl.GetTexImage(cube ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + f : GL_TEXTURE_2D, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE,
                            t->levels[f][0].data());
+#endif
     }
 
     void InvalidateTextureBinding()
@@ -993,30 +1070,34 @@ struct Executor : GfxExecutor {
 
     // The vertex format of a buffer, from its start; draws give their first
     // vertex.
-    void BindVertices(GLuint buffer, bool transformed)
+    // base: the vertex the pointers start at (OpenGL ES, which has no BaseVertex).
+    void BindVertices(GLuint buffer, bool transformed, GLint base = 0)
     {
-        if (bound.vertices == buffer && bound.transformed == transformed)
+        if (bound.vertices == buffer && bound.transformed == transformed && bound.base == base)
             return;
         gl.BindBuffer(GL_ARRAY_BUFFER, buffer);
         if (transformed) {
             const GLsizei stride = sizeof(GfxTLVertex);
-            gl.VertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (const void *)0);
-            gl.VertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const void *)16);
-            gl.VertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const void *)20);
-            gl.VertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, (const void *)24);
+            const char *at = (const char *)0 + (size_t)base * stride;
+            gl.VertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, at + 0);
+            gl.VertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, at + 16);
+            gl.VertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, at + 20);
+            gl.VertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, at + 24);
         } else {
             const GLsizei stride = sizeof(GfxVertex);
-            gl.VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (const void *)0);
-            gl.VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (const void *)12);
-            gl.VertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const void *)24);
-            gl.VertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, (const void *)28);
-            gl.VertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, stride, (const void *)32);
-            gl.VertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, stride, (const void *)40);
+            const char *at = (const char *)0 + (size_t)base * stride;
+            gl.VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, at + 0);
+            gl.VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, at + 12);
+            gl.VertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, at + 24);
+            gl.VertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride, at + 28);
+            gl.VertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, stride, at + 32);
+            gl.VertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, stride, at + 40);
         }
         for (GLuint i = 0; i < (transformed ? 4u : 6u); i++)
             gl.EnableVertexAttribArray(i);
         bound.vertices = buffer;
         bound.transformed = transformed;
+        bound.base = base;
     }
 
     // ---- state ----
@@ -1037,7 +1118,7 @@ struct Executor : GfxExecutor {
             memcpy(bound.viewport, v, sizeof(v));
         }
         if (bound.depthRange[0] != minZ || bound.depthRange[1] != maxZ) {
-            gl.DepthRange(minZ, maxZ);
+            SetDepthRange(minZ, maxZ);
             bound.depthRange[0] = minZ;
             bound.depthRange[1] = maxZ;
         }
@@ -1107,7 +1188,7 @@ struct Executor : GfxExecutor {
             mask |= GL_COLOR_BUFFER_BIT;
         }
         if (c.clearFlags & GFX_CLEAR_ZBUFFER) {
-            gl.ClearDepth(c.clearZ);
+            SetClearDepth(c.clearZ);
             if (bound.depthWrite != 1) {
                 gl.DepthMask(GL_TRUE);
                 bound.depthWrite = 1;
@@ -1198,13 +1279,25 @@ struct Executor : GfxExecutor {
                 boundFragmentOffset = u.fragmentOffset;
             }
             BindTextures(s);
-            BindVertices(c.buffer != NULL ? ((GlVertexBuffer *)c.buffer->gpu)->buffer : vertexBuffer, c.transformed);
+            const GLuint vertices = c.buffer != NULL ? ((GlVertexBuffer *)c.buffer->gpu)->buffer : vertexBuffer;
             GLint firstVertex = (GLint)(c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex)));
+#ifdef OPENCMR2_RENDERER_GLES
+            if (c.firstIndex != ~0u) {
+                BindVertices(vertices, c.transformed, firstVertex);
+                gl.DrawElements(PrimitiveMode(c.primitive), (GLsizei)c.indexCount, GL_UNSIGNED_SHORT,
+                                (const void *)(uintptr_t)(c.firstIndex * 2));
+            } else {
+                BindVertices(vertices, c.transformed);
+                gl.DrawArrays(PrimitiveMode(c.primitive), firstVertex, (GLsizei)c.vertexCount);
+            }
+#else
+            BindVertices(vertices, c.transformed);
             if (c.firstIndex != ~0u)
                 gl.DrawElementsBaseVertex(PrimitiveMode(c.primitive), (GLsizei)c.indexCount, GL_UNSIGNED_SHORT,
                                           (const void *)(uintptr_t)(c.firstIndex * 2), firstVertex);
             else
                 gl.DrawArrays(PrimitiveMode(c.primitive), firstVertex, (GLsizei)c.vertexCount);
+#endif
         }
         if (present)
             Present(readback, vsync, stretch);
@@ -1223,7 +1316,7 @@ struct Executor : GfxExecutor {
             Readback &r = FreeReadback(readback);
             gl.BindBuffer(GL_PIXEL_PACK_BUFFER, r.buffer);
             gl.BufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)w * h * 4, NULL, GL_STREAM_READ);
-            gl.ReadPixels(x, y, w, h, GL_BGRA, GL_UNSIGNED_BYTE, (void *)0);
+            gl.ReadPixels(x, y, w, h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (void *)0);
             gl.BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
             r.fence = gl.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
             r.serial = ++readbackSerial;
@@ -1298,6 +1391,7 @@ struct Executor : GfxExecutor {
             GL_PIXEL_PACK_BUFFER, 0, (GLsizeiptr)r.width * r.height * 4, GL_MAP_READ_BIT);
         if (map != NULL) {
             readback.pixels.assign(map, map + (size_t)r.width * r.height);
+            SwapRedBlue(readback.pixels.data(), readback.pixels.size());
             gl.UnmapBuffer(GL_PIXEL_PACK_BUFFER);
             readback.readyWidth = r.width;
             readback.readyHeight = r.height;
@@ -1327,7 +1421,8 @@ struct Executor : GfxExecutor {
         if (!Gfx_FrameHashWanted())
             return;
         std::vector<uint8_t> pixels((size_t)backWidth * backHeight * 4);
-        gl.ReadPixels(0, 0, backWidth, backHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
+        gl.ReadPixels(0, 0, backWidth, backHeight, PIXEL_FORMAT, GL_UNSIGNED_BYTE, pixels.data());
+        SwapRedBlue(pixels.data(), (size_t)backWidth * backHeight);
         Gfx_HashFrame(pixels.data(), backWidth, backHeight);
     }
 };
@@ -1341,9 +1436,15 @@ GfxExecutor *Gfx_CreateGlExecutor(void)
 
 unsigned long long Gfx_PrepareGlWindow(void)
 {
+#ifdef OPENCMR2_RENDERER_GLES
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     // The game draws into its own framebuffer: the window's needs no depth.
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
