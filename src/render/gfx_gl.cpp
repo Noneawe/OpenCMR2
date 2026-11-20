@@ -38,6 +38,7 @@
 #include <array>
 #include <map>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -1189,10 +1190,123 @@ struct Executor : GfxExecutor {
             if (bound.vertices == vertexBuffer)
                 bound.vertices = ~0u;
         }
+#ifdef OPENCMR2_RENDERER_GLES
+        BuildBatches(frame);
+        if (!batchIndices.empty())
+            gl.BufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(batchIndices.size() * 4), batchIndices.data(),
+                          GL_STREAM_DRAW);
+#else
         if (!frame.indices.empty())
             gl.BufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(frame.indices.size() * 2), frame.indices.data(),
                           GL_STREAM_DRAW);
+#endif
     }
+
+#ifdef OPENCMR2_RENDERER_GLES
+    // The Mali driver costs the CPU ~50 us per draw call. Draws that write depth without blending (the stage's
+    // opaque and cut-out surfaces, a third of a race frame's draws) can come in any order, so the ones with
+    // the same state, buffer and vertex type, in a run of such draws, are made one call. Each draw's
+    // indices are copied, 32 bits wide with its first vertex added (no BaseVertex before ES 3.2), so that
+    // the indices of a group lie one after another.
+    std::vector<uint32_t> batchIndices;   // the frame's indices, as drawn
+    std::vector<uint32_t> batchOrder;     // the commands, in the order they are run
+    std::vector<uint32_t> batchOffset, batchCount;   // per command: where its indices start, how many (a group's)
+    std::vector<uint8_t> batchSkip;       // per command: drawn with an earlier command's group
+
+    static uint64_t HashState(const GfxDrawState &s)
+    {
+        uint64_t hash = 1469598103934665603ull;
+        const unsigned char *bytes = (const unsigned char *)&s;
+        size_t n = sizeof(s) / 8;
+        for (size_t i = 0; i < n; i++) {
+            uint64_t word;
+            memcpy(&word, bytes + i * 8, 8);
+            hash = (hash ^ word) * 1099511628211ull;
+        }
+        for (size_t i = n * 8; i < sizeof(s); i++)
+            hash = (hash ^ bytes[i]) * 1099511628211ull;
+        return hash;
+    }
+
+    static bool Reorderable(const GfxFrame &frame, const GfxCommand &c)
+    {
+        if (c.type != GFX_CMD_DRAW || c.transformed || c.firstIndex == ~0u || PrimitiveMode(c.primitive) != GL_TRIANGLES)
+            return false;
+        const GfxDrawState &s = frame.states[c.state];
+        return !s.alphaBlend && s.depthTest && s.depthWrite && (s.depthFunc == GFX_CMP_LESS || s.depthFunc == GFX_CMP_LESSEQUAL);
+    }
+
+    void BuildBatches(const GfxFrame &frame)
+    {
+        const size_t n = frame.commands.size();
+        batchIndices.clear();
+        batchOrder.clear();
+        batchOffset.assign(n, 0);
+        batchCount.assign(n, 0);
+        batchSkip.assign(n, 0);
+        std::vector<uint64_t> stateHash(frame.states.size(), 0);
+        auto Append = [&](size_t i) {
+            const GfxCommand &c = frame.commands[i];
+            const uint32_t first =
+                (uint32_t)(c.firstVertexByte / (c.transformed ? sizeof(GfxTLVertex) : sizeof(GfxVertex)));
+            for (uint32_t k = 0; k < c.indexCount; k++)
+                batchIndices.push_back(frame.indices[c.firstIndex + k] + first);
+        };
+        struct Group { size_t leader; std::vector<uint32_t> members; };
+        for (size_t i = 0; i < n;) {
+            const GfxCommand &c = frame.commands[i];
+            if (c.type == GFX_CMD_DRAW && c.firstIndex != ~0u && !Reorderable(frame, c)) {
+                batchOffset[i] = (uint32_t)batchIndices.size();
+                batchCount[i] = c.indexCount;
+                Append(i);
+            }
+            if (!Reorderable(frame, c)) {
+                batchOrder.push_back((uint32_t)i++);
+                continue;
+            }
+            size_t end = i;
+            while (end < n && Reorderable(frame, frame.commands[end]))
+                end++;
+            // Groups by state (by content: the game sets the state afresh for every draw), buffer and vertex format.
+            std::vector<Group> groups;
+            std::unordered_map<uint64_t, std::vector<size_t>> byKey;
+            for (size_t j = i; j < end; j++) {
+                const GfxCommand &d = frame.commands[j];
+                uint64_t &h = stateHash[d.state];
+                if (h == 0)
+                    h = HashState(frame.states[d.state]) | 1;
+                const uint64_t key = h ^ ((uint64_t)(uintptr_t)d.buffer * 0x9e3779b97f4a7c15ull) ^ (uint64_t)d.primitive;
+                size_t found = ~(size_t)0;
+                for (size_t g : byKey[key]) {
+                    const GfxCommand &l = frame.commands[groups[g].leader];
+                    if (l.buffer == d.buffer && l.primitive == d.primitive &&
+                        (l.state == d.state ||
+                         memcmp(&frame.states[l.state], &frame.states[d.state], sizeof(GfxDrawState)) == 0)) {
+                        found = g;
+                        break;
+                    }
+                }
+                if (found == ~(size_t)0) {
+                    found = groups.size();
+                    groups.push_back({ j, {} });
+                    byKey[key].push_back(found);
+                }
+                groups[found].members.push_back((uint32_t)j);
+            }
+            for (Group &g : groups) {
+                batchOffset[g.leader] = (uint32_t)batchIndices.size();
+                for (uint32_t m : g.members) {
+                    Append(m);
+                    batchCount[g.leader] += frame.commands[m].indexCount;
+                    if (m != g.leader)
+                        batchSkip[m] = 1;
+                }
+                batchOrder.push_back((uint32_t)g.leader);
+            }
+            i = end;
+        }
+    }
+#endif
 
     void UploadVertexBuffers(const GfxFrame &frame)
     {
@@ -1386,9 +1500,13 @@ struct Executor : GfxExecutor {
         GLintptr boundVertexOffset = -1, boundFragmentOffset = -1;
 #ifdef OPENCMR2_RENDERER_GLES
         int sinceFlush = 0;
-#endif
+        for (size_t order = 0; order < batchOrder.size(); order++) {
+            const size_t i = batchOrder[order];
+            const GfxCommand &c = frame.commands[i];
+#else
         for (size_t i = 0; i < frame.commands.size(); i++) {
             const GfxCommand &c = frame.commands[i];
+#endif
             if (c.type == GFX_CMD_TARGET) {
                 target = c.target;
                 if (target == NULL) {
@@ -1455,14 +1573,12 @@ struct Executor : GfxExecutor {
                 gl.Flush();
                 sinceFlush = 0;
             }
-            if (c.firstIndex != ~0u) {
-                BindVertices(vertices, c.transformed, firstVertex);
-                gl.DrawElements(PrimitiveMode(c.primitive), (GLsizei)c.indexCount, GL_UNSIGNED_SHORT,
-                                (const void *)(uintptr_t)(c.firstIndex * 2));
-            } else {
-                BindVertices(vertices, c.transformed);
+            BindVertices(vertices, c.transformed);
+            if (c.firstIndex != ~0u)
+                gl.DrawElements(PrimitiveMode(c.primitive), (GLsizei)batchCount[i], GL_UNSIGNED_INT,
+                                (const void *)((uintptr_t)batchOffset[i] * 4));
+            else
                 gl.DrawArrays(PrimitiveMode(c.primitive), firstVertex, (GLsizei)c.vertexCount);
-            }
 #else
             BindVertices(vertices, c.transformed);
             if (c.firstIndex != ~0u)

@@ -348,3 +348,12 @@ More R36S measurements (all `stage_probe`, per race frame, median of 19 windows 
 - `glFlush` every 100 draws of the back buffer: mean 57.7 -> 47.7 ms (17 -> 21 fps), every 50 the same, every 200 49.9. Kept.
 - Where the draws come from (race frame 1500, 409 draws): 360 indexed triangle lists of stage geometry, 156 of them <= 6 indices, 29
   2D (TL) draws. Consecutive draws differ mostly only in the texture (157) or the texture and world matrix (155).
+
+### R36S: batching of opaque draws (ES mode)
+Race frame 1500 (409 draws): 151 write depth without blending (the stage's opaque and cut-out surfaces: alpha test 128, no blend),
+and fall into 44 distinct states; 174 blend with depth writes (foliage), 85 more are tiny or 2D. `BuildBatches` runs of such draws
+(`depthFunc` LESS or LESSEQUAL, no blend, indexed triangle lists) are grouped by state content, buffer and vertex format, and each
+group is one call (its indices copied together, 32 bits wide with the first vertex added). Order inside a run changes only which
+of two surfaces at exactly the same depth wins. Desktop ES: trace identical, frames within 0.13/255 of the SDL_GPU baseline.
+R36S (stage_probe): race frame mean 47.7 -> 42.7 ms (21 -> 23 fps), median 51.7 -> 39.0 ms.
+Not done: the blended foliage (order matters); merging it would need the world matrix baked into the vertices on the CPU.
