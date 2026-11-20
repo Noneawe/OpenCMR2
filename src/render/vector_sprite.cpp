@@ -5,6 +5,7 @@
 #include "render/gfx_internal.h"
 #include "render/distance_field.h"
 #include "port/sys.h"
+#include "platform/platform.h"
 #include "potracelib.h"
 
 #include <algorithm>
@@ -327,7 +328,7 @@ Built Build(const Image &image, const std::vector<Cell> &cells, bool curves, boo
 } // namespace
 
 extern "C" void VectorSprite_Replace(const char *name, GfxTexture *texture) {
-    if (!name || !texture || texture->replacement)
+    if (!name || !texture || texture->replacement || !Platform_GetSettingInt("video.vector_icons", 1))
         return;
     std::string base(name);
     base = base.substr(base.find_last_of("\\/") + 1);

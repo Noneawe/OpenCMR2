@@ -357,3 +357,17 @@ group is one call (its indices copied together, 32 bits wide with the first vert
 of two surfaces at exactly the same depth wins. Desktop ES: trace identical, frames within 0.13/255 of the SDL_GPU baseline.
 R36S (stage_probe): race frame mean 47.7 -> 42.7 ms (21 -> 23 fps), median 51.7 -> 39.0 ms.
 Not done: the blended foliage (order matters); merging it would need the world matrix baked into the vertices on the CPU.
+
+### R36S: what the CPU does (sampling profiler) and the load time
+`OPENCMR2_SAMPLE=path` (`src/diagnostics/sampler.cpp`, `tools/sample_summary.py`): SIGPROF every 1 ms of CPU time, the program counters and
+`/proc/self/maps` saved; `tools/sample_summary.py samples maps unstripped-exe aarch64-linux-gnu-nm` gives samples per function (the device has no perf,
+strace or gdb). `OPENCMR2_GL_STATS=1` (ES): every 120 frames the time per frame, the executor's CPU time and the swap's.
+Whole `stage_probe` run on the Mali-G31 / 4x Cortex-A35 (27.8 k CPU samples): 43.6 % `DistanceField::DistanceTransform` (fonts and vector icons),
+8.7 % `OutlineFont_Replace`, 18 % the Mali driver. That is load time, not race time. With `[video] outline_fonts = 0`: wall time of the run 140 -> 83 s;
+with the new `[video] vector_icons = 0` too: 67 s, 9.5 k samples, of them 51 % the Mali driver, 15 % libc, 11 % the executor. The R36S's screen is the game's own
+640x480, where the original bitmaps are as sharp: both are 0 in the ini shipped for it.
+Race frame (all of the above, `vsync = 0`): 38.8 ms = game 5.8 + executor on the CPU 17.1 + swap 16.0. A render thread could hide at most the game's
+5.8 ms and has to synchronise the frame recording with the executor in many places (flush on texture changes, lock of render targets, readback, destroys),
+so it was not built. Merging the blended foliage: 185 draws, 175 from static buffers (vertices cannot be baked on the CPU), only 17 adjacent pairs differ in the
+world matrix alone: not worth it. `glGetString(GL_EXTENSIONS)` on the Mali: no S3TC (BC1/BC3 are decoded on the CPU), has ASTC LDR, ARM_shader_framebuffer_fetch,
+EXT_texture_format_BGRA8888, EXT_disjoint_timer_query (measured 0.4 ms for 39 ms frames: no use). Memory: 918 MB, no swap, MemAvailable never below ~590 MB in a race.

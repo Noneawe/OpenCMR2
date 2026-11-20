@@ -13,6 +13,7 @@
 // rows as they are, faces wind the other way round, and only the copy to the
 // window turns the picture over.
 
+#include "diagnostics/sampler.h"
 #include "platform/platform.h"
 #include "port/sys.h"
 #include "render/presentation.h"
@@ -262,6 +263,14 @@ struct Executor : GfxExecutor {
     GLuint vertexArray = 0, vertexBuffer = 0, indexBuffer = 0, uniformBuffer = 0;
     GLuint backFramebuffer = 0, backColor = 0, backDepth = 0;
     GLuint backdrop = 0;    // the copy of backColor the distance fade reads
+#ifdef OPENCMR2_RENDERER_GLES
+    // OPENCMR2_GL_STATS=1: every 120 frames, the time per frame, the part of it this executor takes on the
+    // CPU and the part of that spent in the swap, in ms. (GL_EXT_disjoint_timer_query is there on the
+    // Mali-G31, but measured 0.4 ms for frames that took 39: it times only the last piece of a flushed frame.)
+    bool statsOn = false;
+    uint64_t statExecNs = 0, statSwapNs = 0, statWallStart = 0;
+    int statFrames = 0;
+#endif
     int backWidth = 0, backHeight = 0;
     GLuint white2D = 0, whiteCube = 0;
     GLint uniformAlignment = 256;
@@ -591,6 +600,22 @@ struct Executor : GfxExecutor {
             return false;
         }
 #endif
+        {
+            static const char *const wanted[] = { "GL_EXT_texture_compression_s3tc", "GL_EXT_texture_compression_dxt1",
+                                                  "GL_ARM_shader_framebuffer_fetch", "GL_EXT_shader_framebuffer_fetch",
+                                                  "GL_KHR_texture_compression_astc_ldr", "GL_EXT_texture_filter_anisotropic",
+                                                  "GL_EXT_disjoint_timer_query", "GL_EXT_texture_format_BGRA8888" };
+            std::string found;
+            for (const char *name : wanted)
+                if (HasExtension(name))
+                    found += std::string(" ") + name;
+            Sys_Log("gfx: extensions:%s", found.empty() ? " none of the ones looked for" : found.c_str());
+        }
+#ifdef OPENCMR2_RENDERER_GLES
+        statsOn = SDL_getenv("OPENCMR2_GL_STATS") != NULL;
+        statWallStart = SDL_GetTicksNS();
+#endif
+        Diagnostics::StartSamplerFromEnvironment();
         anisotropy = Platform_GetSettingInt("video.anisotropy", 1);
         smoothScaling = Platform_GetSettingInt("video.smooth_scaling", 1);
         bcSupported = HasExtension("GL_EXT_texture_compression_s3tc");
@@ -1481,6 +1506,9 @@ struct Executor : GfxExecutor {
     {
         if (context == nullptr)
             return;
+#ifdef OPENCMR2_RENDERER_GLES
+        const uint64_t executeStart = statsOn ? SDL_GetTicksNS() : 0;
+#endif
         for (const GfxDrawState &s : frame.states)
             for (const GfxStageState &stage : s.stages)
                 if (stage.texture != NULL)
@@ -1590,6 +1618,10 @@ struct Executor : GfxExecutor {
         }
         if (present)
             Present(readback, vsync, stretch);
+#ifdef OPENCMR2_RENDERER_GLES
+        if (statsOn)
+            statExecNs += SDL_GetTicksNS() - executeStart;
+#endif
     }
 
     void Present(GfxReadback &readback, bool vsync, bool stretch)
@@ -1643,7 +1675,24 @@ struct Executor : GfxExecutor {
         gl.Clear(GL_COLOR_BUFFER_BIT);
         gl.BlitFramebuffer(0, 0, backWidth, backHeight, rect.x, sh - rect.y, rect.x + rect.width,
                            sh - rect.y - rect.height, GL_COLOR_BUFFER_BIT, smoothScaling ? GL_LINEAR : GL_NEAREST);
+#ifdef OPENCMR2_RENDERER_GLES
+        const uint64_t swapStart = statsOn ? SDL_GetTicksNS() : 0;
+#endif
         SDL_GL_SwapWindow(window);
+        Diagnostics::SamplerTick();
+#ifdef OPENCMR2_RENDERER_GLES
+        if (statsOn) {
+            statSwapNs += SDL_GetTicksNS() - swapStart;
+            if (++statFrames == 120) {
+                const uint64_t now = SDL_GetTicksNS();
+                Sys_Log("gfx stats: %.1f ms per frame: executor on the CPU %.1f, of it swap %.1f", (now - statWallStart) / 120e6,
+                        statExecNs / 120e6, statSwapNs / 120e6);
+                statWallStart = now;
+                statExecNs = statSwapNs = 0;
+                statFrames = 0;
+            }
+        }
+#endif
         gl.Enable(GL_SCISSOR_TEST);
         bound.framebuffer = ~0u;
     }
