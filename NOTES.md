@@ -298,3 +298,17 @@ with the camera, as a head turn would. Look at it with the range of real head mo
 
 ## Decisions
 (none yet)
+
+## R36S (ArkOS, RK3326, Mali-G31), flat mode, no VR
+
+Cross-built on the desktop, not run on the device. `cmake/linux-aarch64-r36s.cmake`, a sysroot from an Ubuntu 20.04 arm64
+container (glibc 2.31; `libc6-dev libstdc++-10-dev libgcc-10-dev libdrm-dev libgbm-dev libegl1-mesa-dev libgl1-mesa-dev
+libgles2-mesa-dev libudev-dev libasound2-dev libdbus-1-dev`, absolute symlinks made relative so `ld` follows them),
+host `spirv-cross` on `PATH`, `R36S_SYSROOT` set:
+`cmake -S . -B build/r36s -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/linux-aarch64-r36s.cmake -DCMAKE_BUILD_TYPE=Release
+-DOPENCMR2_VR=OFF -DOPENCMR2_VENDORED_SDL=ON -DSDL_KMSDRM=ON -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_X11=OFF -DSDL_WAYLAND=OFF
+-DSDL_VULKAN=OFF -DSDL_PULSEAUDIO=OFF -DSDL_PIPEWIRE=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF`.
+Result: needs glibc 2.30 at most (ArkOS 19.10 has 2.30), libstdc++ static, SDL3 shared beside the binary (KMSDRM and ALSA
+loaded at run time). Run under qemu-aarch64 with the dummy video driver: starts and reports missing game data. Not
+checked: OpenGL on Panfrost (reports 3.1; the launcher sets `MESA_GL_VERSION_OVERRIDE=3.3`), speed on 4x Cortex-A35 and 1 GB,
+pad mapping, the 640x480 screen.
