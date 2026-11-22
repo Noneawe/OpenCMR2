@@ -1,0 +1,41 @@
+Instructions to install the Testing Zip:
+Drop the .zip into your Portmaster autoinstall folder and run Portmaster.
+or
+run via ssh: harbourmaster install "zip url from discord"
+
+Game Information
+Title: Colin McRae Rally 2.0
+URL: https://github.com/pablocpas/OpenCMR2
+
+Instructions:
+Copy the folders Game, FrontEnd, Sounds, CountrySpecific and SetupRep from your own copy of Colin McRae Rally 2.0 for PC to ports/opencmr2/gamedata/.
+
+| Button | Action |
+|--|--|
+|DPAD| Move in menus, steer |
+|Left Stick| Steer |
+|A| Confirm / Handbrake |
+|B| Back / Look back |
+|Y| Change camera |
+|L1| Gear down |
+|R1| Gear up |
+|L2| Brake |
+|R2| Accelerate |
+|Start| Pause and resume |
+|Start + Select| Quit the game |
+
+CFW Tests:
+[ ] AmberELEC
+[ ] dArkOS
+[ ] MuOS
+ROCKNIX
+-> [ ] Libmali
+-> [ ] Panfrost
+-> [ ] Adreno (Optional)
+[ ] Knulli
+
+Resolutions:
+[ ] 480x320 (Optional)
+[ ] 640x480
+[ ] 720x720 (RGB30) (Optional)
+[ ] Higher resolutions (e.g., 1280)

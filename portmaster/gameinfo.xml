@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gameList>
+  <game>
+    <path>./OpenCMR2.sh</path>
+    <name>Colin McRae Rally 2.0</name>
+    <desc>Rally racing with real cars and stages from the 2000 Codemasters game. Drive against the clock through gravel, tarmac and snow stages in championship, arcade and time trial modes, with a co-driver reading the pace notes. This is a native port of the decompiled game and needs the player's own game files.</desc>
+    <releasedate>20001208T000000</releasedate>
+    <developer>Codemasters</developer>
+    <publisher>Codemasters</publisher>
+    <genre>Racing</genre>
+    <image>./opencmr2/screenshot.png</image>
+  </game>
+</gameList>

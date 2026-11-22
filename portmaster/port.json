@@ -1,0 +1,33 @@
+{
+  "version": 4,
+  "name": "opencmr2.zip",
+  "items": [
+    "OpenCMR2.sh",
+    "opencmr2"
+  ],
+  "items_opt": [],
+  "attr": {
+    "title": "Colin McRae Rally 2.0",
+    "porter": [
+      "TODO-your-handle"
+    ],
+    "desc": "Colin McRae Rally 2.0 through OpenCMR2, a native port of the decompiled game. Rally stages with the original cars, stages and menus, drawn with OpenGL ES 3.0. The language follows the game files you supply (settings in conf/opencmr2.ini).",
+    "desc_md": null,
+    "inst": "Copy the folders Game, FrontEnd, Sounds, CountrySpecific and SetupRep from your own copy of Colin McRae Rally 2.0 for PC (the original disc) to ports/opencmr2/gamedata/.",
+    "inst_md": null,
+    "genres": [
+      "racing"
+    ],
+    "image": null,
+    "rtr": false,
+    "exp": false,
+    "runtime": [],
+    "store": [],
+    "availability": "paid",
+    "reqs": [],
+    "arch": [
+      "aarch64"
+    ],
+    "min_glibc": "2.30"
+  }
+}

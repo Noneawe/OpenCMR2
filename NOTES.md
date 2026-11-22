@@ -377,3 +377,18 @@ the Mali driver itself (its own copies; nothing to change from here except givin
 page flip), and only ~3 % from this program: the executor's `memset`/`memcmp` (1.7 %), vector inserts of the recorded frame (1 %), `RecordDraw` (0.6 %), i.e.
 ~0.7 ms of a 22 ms CPU frame. Not worth a change (the vertex uniform block is 1.4 KB per distinct state, 8 lights of it; splitting it would save ~1 ms and touches the
 SDL_GPU shader too).
+
+## PortMaster package (R36S and other aarch64 CFWs)
+`portmaster/` holds the text files of the package (launch script, port.json, gameinfo.xml, README.md, testing_thread.txt, default
+settings). The zip is assembled outside the repository: `OpenCMR2.sh` beside `opencmr2/` with `opencmr2.aarch64` (stripped,
+RUNPATH `$ORIGIN:$ORIGIN/libs.aarch64`), `libs.aarch64/libSDL3.so.0`, `licenses/`, `patches/` (`git format-patch 6e201df..HEAD`),
+an empty `gamedata/` and `conf/`, and a real screenshot from the device. No game files are in it.
+- PortMaster forbids bundling upstream SDL3. The bundled `libSDL3.so.0` is the sdl3-sdl2-backend shim (bmdhacks/SDL, branch
+  `sdl2-backend`, commit 6057d79, SDL 3.5.0, built `-march=armv8-a`, glibc 2.29), which loads the device's SDL2. The game is still
+  built against real SDL3 3.4. Launch script forwards the CFW's `SDL_VIDEODRIVER`/`SDL_AUDIODRIVER` into `SDL3SHIM_SDL2_*`.
+- Checked on the R36S (ArkOS, PortMaster in /opt/system/Tools): the script runs end to end from ssh, the pad is found through SDL2,
+  OpenGL ES 3.0 on the Mali-G31 works through the shim, the intro and the Polish main menu draw, audio opens when
+  EmulationStation is stopped (it holds the sound card otherwise). Not checked: sound heard, Start+Select exit and pad mapping
+  from the device's own buttons, a launch from the Ports menu, other CFWs and GPUs (Panfrost), speed through the shim against the
+  native SDL3 build.
+- `porter` in port.json is a placeholder to fill in; `store` is empty (the game is no longer sold); the crew decides the repository.
