@@ -392,3 +392,16 @@ an empty `gamedata/` and `conf/`, and a real screenshot from the device. No game
   from the device's own buttons, a launch from the Ports menu, other CFWs and GPUs (Panfrost), speed through the shim against the
   native SDL3 build.
 - `porter` in port.json is a placeholder to fill in; `store` is empty (the game is no longer sold); the crew decides the repository.
+
+### R36S: tree batching (suggested in issue #66), analysis
+Race frame 1500 (desktop ES, stage_probe, Polish data): 428 commands, 175 of them blended with depth writes (foliage): 679 triangles and 1360 vertices
+in all, 21 textures (mostly 128x128 and 64x64), 10 static buffers, 172 different world matrices; the texture changes on 153 of the 175 draws, so
+only an atlas (or texture array) lets them be one call; merging runs of equal texture gains nothing. All of them: SRCALPHA/INVSRCALPHA, alpha test
+GREATER ref 1 (so soft edges blend and the order matters there), clamp addressing, UVs inside 0..1, vertex lighting on, distance fade 170-200, and
+only 4 distinct states once the world matrix and the texture are left out (cull and destination blend differ).
+Upper bound measured on the R36S (throw-away change, not committed): the same draws grouped by state and buffer ignoring world matrix and texture
+(wrong picture, same triangles, ~40 groups instead of 175 calls), stage_probe 500 ticks, alternating runs: mean frame 57.7 and 55.3 ms against 44.7 and
+47.3 ms, i.e. about 10 ms (17-20 %). The baseline drifted from 42.6 ms measured earlier to ~56 ms on that day (device state: with the CPU governor
+`performance` instead of `interactive` 50.7 ms; the rest unexplained), so only same-day pairs are comparable. A real version needs: vertices baked to
+world space once per buffer and matrix, an atlas with padding and mip levels, indices sorted back to front each frame, ES only. Not built.
+Light ramps (the other suggestion): the sampler shows no function recomputing vertex colours among those above 0.1 % of the samples, so not done.
