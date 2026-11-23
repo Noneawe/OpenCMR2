@@ -809,7 +809,7 @@ struct Executor : GfxExecutor {
             if (!t->dirty)
                 continue;
 #ifdef OPENCMR2_RENDERER_GLES
-            atlasSlots.erase(t);    // its copy in the atlas is old
+            statAtlasInvalidated += atlasSlots.erase(t);    // its copy in the atlas is old
 #endif
             Upload(t, Ensure(t));
             t->dirty = false;
@@ -1357,7 +1357,7 @@ struct Executor : GfxExecutor {
     int atlasX = 0, atlasY = 0, atlasRow = 0;           // shelf packing, no freeing: the atlas starts over when full
     bool atlasFull = false;
     const bool treeBatch = getenv("OPENCMR2_TREE_BATCH") == NULL || atoi(getenv("OPENCMR2_TREE_BATCH")) != 0;
-    uint64_t statJoinedRuns = 0, statJoinedDraws = 0;
+    uint64_t statJoinedRuns = 0, statJoinedDraws = 0, statPlaced = 0, statAtlasResets = 0, statAtlasInvalidated = 0;
 
     bool EnsureAtlas()
     {
@@ -1446,6 +1446,7 @@ struct Executor : GfxExecutor {
         gl.BindTexture(GL_TEXTURE_2D, atlasGl->texture);
         InvalidateTextureBinding();
         gl.TexSubImage2D(GL_TEXTURE_2D, 0, atlasX, atlasY, pw, ph, PIXEL_FORMAT, GL_UNSIGNED_BYTE, block.data());
+        statPlaced++;
         AtlasSlot slot = { atlasX + 1, atlasY + 1 };
         atlasX += pw;
         atlasRow = std::max(atlasRow, ph);
@@ -1467,6 +1468,8 @@ struct Executor : GfxExecutor {
         if (!treeBatch)
             return;
         if (atlasFull) {
+            statAtlasResets++;
+            Sys_Log("gfx: tree atlas full, starting over (%zu textures in it)", atlasSlots.size());
             atlasSlots.clear();
             atlasX = atlasY = atlasRow = 0;
             atlasFull = false;
@@ -1906,9 +1909,9 @@ struct Executor : GfxExecutor {
             statSwapNs += SDL_GetTicksNS() - swapStart;
             if (++statFrames == 120) {
                 const uint64_t now = SDL_GetTicksNS();
-                Sys_Log("gfx stats: %.1f ms per frame: executor on the CPU %.1f, of it swap %.1f; tree runs %.1f of %.1f draws per frame",
+                Sys_Log("gfx stats: %.1f ms per frame: executor on the CPU %.1f, of it swap %.1f; tree runs %.1f of %.1f draws per frame; atlas places %llu, old copies %llu, restarts %llu",
                         (now - statWallStart) / 120e6, statExecNs / 120e6, statSwapNs / 120e6, statJoinedRuns / 120.0,
-                        statJoinedDraws / 120.0);
+                        statJoinedDraws / 120.0, (unsigned long long)statPlaced, (unsigned long long)statAtlasInvalidated, (unsigned long long)statAtlasResets);
                 statWallStart = now;
                 statExecNs = statSwapNs = 0;
                 statJoinedRuns = statJoinedDraws = 0;
