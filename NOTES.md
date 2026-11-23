@@ -418,3 +418,11 @@ run-to-run noise of the game (two runs without it differ as much); R36S (stage_p
 55.5 and 55.5 ms off, 47.5 and 43.1 ms on (the executor's CPU time 40.8-45.0 -> 32.0-34.9 ms); the median 51.7 -> 38.8 in the best pair. ctest passes
 (one test skipped as before). Not checked: looking at the frames on the device, a stage with other tree textures than Finland 1, a texture changed while it is in
 the atlas, the atlas running full.
+
+### R36S: shader variant stutter, prewarm
+A fresh install (cold `shadercache`) compiled 14 variants during the first stage, 400-500 ms each on the Mali: hitches with ALSA underruns in the log. The second run
+was smooth (variants read from the cache). Tree batching adds no variants (16 with and without it in the probe). Now every variant's key (`SpecialisedProgram`'s) is
+appended to `<user dir>/shadercache/keys.txt`, and a list built in (`src/render/gfx_gl_variants.h`, 17 keys from the probe and one game session on the device) plus that file
+are made in the first frames, the ones in the cache at once (6 ms budget per frame), at most one that has to be compiled for each frame. Probe on the R36S with a cold
+cache: before, 2 race frames over 150 ms (one of 2.1 s); after, none (max 129 ms), the compiling happens before the race (23 frames over 150 ms, ~12 s once, in the
+start of the run). Not checked: other stages' variants beyond those collected, other GPUs.
