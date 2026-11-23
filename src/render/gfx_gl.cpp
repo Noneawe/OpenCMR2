@@ -20,6 +20,9 @@
 #include "render/gfx_internal.h"
 
 #include "shaders_spirv.h"
+#ifdef OPENCMR2_RENDERER_GLES
+#include "render/gfx_gl_variants.h"
+#endif
 
 // Declarations only: every function is loaded through SDL (Gl::Load), and
 // these give the types of its pointers.
@@ -38,6 +41,7 @@
 #include <string>
 #include <array>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -481,6 +485,99 @@ struct Executor : GfxExecutor {
             SDL_SaveFile(path.c_str(), file.data(), 4 + (size_t)written);
     }
 
+    // The variants a game needs are known from earlier runs: the keys of every variant made are kept in
+    // <user dir>/shadercache/keys.txt, with a list built into the program for a first run. They are made in the first
+    // frames, one that has to be compiled (not read from the cache) for each frame, where a pause hurts least
+    // (the intro, the menus), not when the stage first needs them.
+    typedef std::array<int32_t, 22> VariantKey;
+    std::vector<VariantKey> warmKeys;
+    std::set<VariantKey> knownKeys;
+    size_t warmNext = 0;
+    bool warmLoaded = false;
+
+    std::string KeysPath() { return std::string(Platform_GetUserDir()) + "shadercache/keys.txt"; }
+
+    void LoadWarmKeys()
+    {
+        warmLoaded = true;
+        for (const auto &key : kBuiltinVariants)
+            if (knownKeys.insert(VariantKey{ key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7], key[8], key[9], key[10],
+                                             key[11], key[12], key[13], key[14], key[15], key[16], key[17], key[18], key[19],
+                                             key[20], key[21] }).second)
+                warmKeys.push_back(VariantKey{ key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7], key[8], key[9], key[10],
+                                               key[11], key[12], key[13], key[14], key[15], key[16], key[17], key[18], key[19],
+                                               key[20], key[21] });
+        size_t size = 0;
+        char *text = (char *)SDL_LoadFile(KeysPath().c_str(), &size);
+        if (text == NULL)
+            return;
+        std::string all(text, size);
+        SDL_free(text);
+        size_t at = 0;
+        while (at < all.size()) {
+            size_t end = all.find('\n', at);
+            if (end == std::string::npos)
+                end = all.size();
+            VariantKey key;
+            const std::string line = all.substr(at, end - at);
+            const char *c = line.c_str();
+            int count = 0;
+            while (count < 22) {
+                char *next;
+                long v = strtol(c, &next, 10);
+                if (next == c)
+                    break;
+                key[count++] = (int32_t)v;
+                c = next;
+            }
+            if (count == 22 && knownKeys.insert(key).second)
+                warmKeys.push_back(key);
+            at = end + 1;
+        }
+    }
+
+    void RememberKey(const VariantKey &key)
+    {
+        if (!knownKeys.insert(key).second)
+            return;
+        std::string line;
+        for (int32_t v : key)
+            line += std::to_string(v) + " ";
+        line.back() = '\n';
+        SDL_CreateDirectory((std::string(Platform_GetUserDir()) + "shadercache").c_str());
+        if (FILE *file = fopen(KeysPath().c_str(), "ab")) {
+            fwrite(line.data(), 1, line.size(), file);
+            fclose(file);
+        }
+    }
+
+    // Makes the variants of earlier runs: those the cache has at once, at most one that has to be compiled.
+    void PrewarmVariants()
+    {
+        if (!warmLoaded)
+            LoadWarmKeys();
+        const uint64_t start = SDL_GetTicksNS();
+        while (warmNext < warmKeys.size() && SDL_GetTicksNS() - start < 6000000) {
+            const VariantKey &key = warmKeys[warmNext++];
+            FragmentUniforms fu;
+            memset(&fu, 0, sizeof fu);
+            int n = 0;
+            for (int i = 0; i < 4; i++) fu.stage0[i] = key[n++];
+            for (int i = 0; i < 4; i++) fu.stage0b[i] = key[n++];
+            for (int i = 0; i < 4; i++) fu.stage1[i] = key[n++];
+            for (int i = 0; i < 4; i++) fu.stage1b[i] = key[n++];
+            fu.alphaTest[0] = key[n++];
+            fu.alphaTest[1] = key[n++];
+            fu.fogMode[0] = key[n++];
+            fu.fogMode[1] = key[n++];
+            const int flags = key[n++];
+            fu.fogMode[2] = flags & 7;
+            fu.distanceFade[2] = (flags & 8) ? 1.0f : 0.0f;
+            fu.fogMode[3] = key[n++];
+            SpecialisedProgram((flags & 16) != 0, fu);
+        }
+    }
+
     GLuint SpecialisedProgram(bool transformed, const FragmentUniforms &fu)
     {
         std::array<int32_t, 22> key;
@@ -537,6 +634,7 @@ struct Executor : GfxExecutor {
             program = transformed ? programTL : program3d;
         }
         specialised[key] = program;
+        RememberKey(key);
         Sys_Log("gfx: shader variant %d ready in %.0f ms", (int)specialised.size(), (SDL_GetTicksNS() - start) / 1e6);
         return program;
     }
@@ -1732,6 +1830,7 @@ struct Executor : GfxExecutor {
 #ifdef OPENCMR2_RENDERER_GLES
         const uint64_t executeStart = statsOn ? SDL_GetTicksNS() : 0;
         JoinTrees(frame);
+        PrewarmVariants();
 #endif
         for (const GfxDrawState &s : frame.states)
             for (const GfxStageState &stage : s.stages)
