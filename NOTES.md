@@ -405,3 +405,16 @@ Upper bound measured on the R36S (throw-away change, not committed): the same dr
 `performance` instead of `interactive` 50.7 ms; the rest unexplained), so only same-day pairs are comparable. A real version needs: vertices baked to
 world space once per buffer and matrix, an atlas with padding and mip levels, indices sorted back to front each frame, ES only. Not built.
 Light ramps (the other suggestion): the sampler shows no function recomputing vertex colours among those above 0.1 % of the samples, so not done.
+
+### R36S: tree batching, built (ES mode, `JoinTrees` in `gfx_gl.cpp`)
+No change in `game/`. At the start of `Execute` a run of consecutive small draws that blend and write the depth, whose states differ only in the world
+matrix and the first stage's texture, becomes one draw: vertices in world space (positions and normals through the affine world matrix, world matrix
+identity), texture coordinates into an atlas (1024x1024, shelf packing, 1 pixel border of the texture's own edge pixels, level 0 only: these draws use
+clamping, linear filtering and no mip filter; textures up to 128x128, plain formats, UVs inside 0..1, otherwise the draw is left alone). The game's order
+is kept, so the pixels do not depend on a sort. A texture changed or destroyed leaves the atlas. `OPENCMR2_TREE_BATCH=0` turns it off; `OPENCMR2_GL_STATS`
+shows the runs. Race frame 1500: 170 of the 175 draws in one run.
+Checked: desktop ES, stage_probe 500 ticks, 20 dumped frames against the same run with the batching off: mean <= 0.077/255, differences of the size of the
+run-to-run noise of the game (two runs without it differ as much); R36S (stage_probe, same binary, alternating `OPENCMR2_TREE_BATCH` 0/1, mean frame):
+55.5 and 55.5 ms off, 47.5 and 43.1 ms on (the executor's CPU time 40.8-45.0 -> 32.0-34.9 ms); the median 51.7 -> 38.8 in the best pair. ctest passes
+(one test skipped as before). Not checked: looking at the frames on the device, a stage with other tree textures than Finland 1, a texture changed while it is in
+the atlas, the atlas running full.

@@ -808,6 +808,9 @@ struct Executor : GfxExecutor {
         for (GfxTexture *t : textures) {
             if (!t->dirty)
                 continue;
+#ifdef OPENCMR2_RENDERER_GLES
+            atlasSlots.erase(t);    // its copy in the atlas is old
+#endif
             Upload(t, Ensure(t));
             t->dirty = false;
         }
@@ -818,6 +821,9 @@ struct Executor : GfxExecutor {
         GlTexture *g = (GlTexture *)t->gpu;
         if (g == NULL || context == nullptr)
             return;
+#ifdef OPENCMR2_RENDERER_GLES
+        atlasSlots.erase(t);
+#endif
         gl.DeleteTextures(1, &g->texture);
         gl.DeleteRenderbuffers(1, &g->depth);
         for (GLuint &framebuffer : g->framebuffers)
@@ -1333,6 +1339,220 @@ struct Executor : GfxExecutor {
     }
 #endif
 
+
+#ifdef OPENCMR2_RENDERER_GLES
+    // ---- tree batching ----
+    // The game sorts the trees of a stage far to near and draws each as a few triangles with a world matrix and a
+    // texture of its own: ~175 draws of a race frame, ~50 us of CPU each on the Mali. A run of consecutive such draws
+    // that differ only in the world matrix and the texture is made one draw: the vertices in world space, the
+    // textures in an atlas. The triangles stay in the game's order, so the pixels are the same (they blend and
+    // write the depth). OPENCMR2_TREE_BATCH=0 turns it off.
+    static constexpr int kAtlasSize = 1024;
+    static constexpr DWORD kTreeVertices = 64;          // most vertices of a draw that can join
+    static constexpr size_t kJoinedVertices = 4096;     // most vertices of a joined draw
+    struct AtlasSlot { int x, y; };                     // where the texture's own pixels start (1 pixel border around)
+    GfxTexture atlasTexture = {};
+    GlTexture *atlasGl = nullptr;
+    std::unordered_map<GfxTexture *, AtlasSlot> atlasSlots;
+    int atlasX = 0, atlasY = 0, atlasRow = 0;           // shelf packing, no freeing: the atlas starts over when full
+    bool atlasFull = false;
+    const bool treeBatch = getenv("OPENCMR2_TREE_BATCH") == NULL || atoi(getenv("OPENCMR2_TREE_BATCH")) != 0;
+    uint64_t statJoinedRuns = 0, statJoinedDraws = 0;
+
+    bool EnsureAtlas()
+    {
+        if (atlasGl != nullptr)
+            return true;
+        atlasGl = new GlTexture;
+        gl.GenTextures(1, &atlasGl->texture);
+        gl.BindTexture(GL_TEXTURE_2D, atlasGl->texture);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kAtlasSize, kAtlasSize, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+        InvalidateTextureBinding();
+        atlasGl->specified = true;
+        atlasTexture.width = atlasTexture.height = kAtlasSize;
+        atlasTexture.format = GFX_FORMAT_BGRA8;
+        atlasTexture.mipLevels = 1;
+        atlasTexture.gpu = atlasGl;
+        atlasTexture.dirty = false;
+        return true;
+    }
+
+    // The texture a tree draw samples, or NULL when the draw cannot join: not a small indexed triangle list that
+    // blends and writes the depth, a texture that is not small, plain and drawn with clamping and no mip levels, a
+    // world matrix that is not affine, texture coordinates outside the texture, indices outside the draw.
+    GfxTexture *TreeTexture(const GfxFrame &frame, const GfxCommand &c) const
+    {
+        if (c.type != GFX_CMD_DRAW || c.transformed || c.firstIndex == ~0u || c.primitive != GFX_TRIANGLELIST ||
+            c.vertexCount == 0 || c.vertexCount > kTreeVertices || c.indexCount == 0)
+            return NULL;
+        const GfxDrawState &s = frame.states[c.state];
+        if (!s.alphaBlend || !s.depthTest || !s.depthWrite)
+            return NULL;
+        const GfxStageState &stage = s.stages[0];
+        if (stage.address != GFX_ADDRESS_CLAMP || stage.mipFilter != GFX_MIPFILTER_NONE || stage.texCoordIndex != 0 ||
+            stage.textureTransform != GFX_TTFF_DISABLE)
+            return NULL;
+        const GfxMatrix &m = s.world;
+        if (m._14 != 0.0f || m._24 != 0.0f || m._34 != 0.0f || m._44 != 1.0f)
+            return NULL;
+        GfxTexture *t = Gfx_DrawnTexture(stage.texture);
+        if (t == NULL || t->cube != NULL || t->flags != 0 || t->renderedTo || t->width > 128 || t->height > 128 ||
+            t->levels[0][0].empty())
+            return NULL;
+        if (t->format != GFX_FORMAT_BGRX8 && t->format != GFX_FORMAT_BGRA8 && t->format != GFX_FORMAT_BC1 &&
+            t->format != GFX_FORMAT_BC3)
+            return NULL;
+        const GfxVertex *v = c.buffer != NULL ? (const GfxVertex *)((const uint8_t *)c.buffer->vertices.data() + c.firstVertexByte)
+                                              : (const GfxVertex *)(frame.vertices.data() + c.firstVertexByte);
+        for (DWORD k = 0; k < c.vertexCount; k++)
+            if (!(v[k].u0 >= -0.0001f && v[k].u0 <= 1.0001f && v[k].v0 >= -0.0001f && v[k].v0 <= 1.0001f))
+                return NULL;
+        for (DWORD k = 0; k < c.indexCount; k++)
+            if (frame.indices[c.firstIndex + k] >= c.vertexCount)
+                return NULL;
+        return t;
+    }
+
+    // The texture's place in the atlas, with a border of its own edge pixels so that linear filtering at the edge
+    // reads nothing of its neighbours; NULL when the atlas is full.
+    const AtlasSlot *PlaceInAtlas(GfxTexture *t)
+    {
+        auto found = atlasSlots.find(t);
+        if (found != atlasSlots.end())
+            return &found->second;
+        const int w = t->width, h = t->height, pw = w + 2, ph = h + 2;
+        if (atlasX + pw > kAtlasSize) {
+            atlasY += atlasRow;
+            atlasX = 0;
+            atlasRow = 0;
+        }
+        if (atlasY + ph > kAtlasSize) {
+            atlasFull = true;
+            return NULL;
+        }
+        GlTexture plain;
+        plain.compressed = false;
+        std::vector<uint8_t> level;
+        ConvertLevel(t, &plain, t->levels[0][0].data(), w, h, level);
+        const uint32_t *src = (const uint32_t *)level.data();
+        std::vector<uint32_t> block((size_t)pw * ph);
+        for (int y = 0; y < ph; y++) {
+            const int sy = std::min(std::max(y - 1, 0), h - 1);
+            for (int x = 0; x < pw; x++)
+                block[(size_t)y * pw + x] = src[(size_t)sy * w + std::min(std::max(x - 1, 0), w - 1)];
+        }
+        gl.ActiveTexture(GL_TEXTURE0);
+        gl.BindTexture(GL_TEXTURE_2D, atlasGl->texture);
+        InvalidateTextureBinding();
+        gl.TexSubImage2D(GL_TEXTURE_2D, 0, atlasX, atlasY, pw, ph, PIXEL_FORMAT, GL_UNSIGNED_BYTE, block.data());
+        AtlasSlot slot = { atlasX + 1, atlasY + 1 };
+        atlasX += pw;
+        atlasRow = std::max(atlasRow, ph);
+        return &(atlasSlots[t] = slot);
+    }
+
+    // Same state but for the world matrix and the first stage's texture.
+    static bool SameTreeState(const GfxDrawState &a, const GfxDrawState &b)
+    {
+        GfxDrawState x = a, y = b;
+        memset(&x.world, 0, sizeof x.world);
+        memset(&y.world, 0, sizeof y.world);
+        x.stages[0].texture = y.stages[0].texture = NULL;
+        return memcmp(&x, &y, sizeof x) == 0;
+    }
+
+    void JoinTrees(GfxFrame &frame)
+    {
+        if (!treeBatch)
+            return;
+        if (atlasFull) {
+            atlasSlots.clear();
+            atlasX = atlasY = atlasRow = 0;
+            atlasFull = false;
+        }
+        const size_t n = frame.commands.size();
+        std::vector<GfxCommand> out;
+        bool joined = false;
+        for (size_t i = 0; i < n;) {
+            if (TreeTexture(frame, frame.commands[i]) == NULL || !EnsureAtlas()) {
+                out.push_back(frame.commands[i++]);
+                continue;
+            }
+            // The run: draws after the first that join it.
+            size_t end = i;
+            size_t vertices = 0;
+            while (end < n) {
+                const GfxCommand &c = frame.commands[end];
+                GfxTexture *t = TreeTexture(frame, c);
+                if (t == NULL || vertices + c.vertexCount > kJoinedVertices ||
+                    (end > i && !SameTreeState(frame.states[frame.commands[i].state], frame.states[c.state])) ||
+                    PlaceInAtlas(t) == NULL)
+                    break;
+                vertices += c.vertexCount;
+                end++;
+            }
+            if (end - i < 2) {
+                out.push_back(frame.commands[i++]);
+                continue;
+            }
+            size_t indices = 0;
+            for (size_t k = i; k < end; k++)
+                indices += frame.commands[k].indexCount;
+            size_t base = (frame.vertices.size() + sizeof(GfxVertex) - 1) / sizeof(GfxVertex) * sizeof(GfxVertex);
+            frame.vertices.resize(base + vertices * sizeof(GfxVertex));
+            GfxVertex *dst = (GfxVertex *)(frame.vertices.data() + base);
+            const uint32_t firstIndex = (uint32_t)frame.indices.size();
+            frame.indices.reserve(frame.indices.size() + indices);
+            size_t first = 0;
+            for (size_t k = i; k < end; k++) {
+                const GfxCommand &c = frame.commands[k];
+                const GfxDrawState &s = frame.states[c.state];
+                const GfxMatrix &m = s.world;
+                GfxTexture *t = Gfx_DrawnTexture(s.stages[0].texture);
+                const AtlasSlot &slot = atlasSlots[t];
+                const GfxVertex *in = c.buffer != NULL
+                    ? (const GfxVertex *)((const uint8_t *)c.buffer->vertices.data() + c.firstVertexByte)
+                    : (const GfxVertex *)(frame.vertices.data() + c.firstVertexByte);
+                for (DWORD v = 0; v < c.vertexCount; v++) {
+                    const GfxVertex &a = in[v];
+                    GfxVertex &o = dst[first + v];
+                    o = a;
+                    o.x = a.x * m._11 + a.y * m._21 + a.z * m._31 + m._41;
+                    o.y = a.x * m._12 + a.y * m._22 + a.z * m._32 + m._42;
+                    o.z = a.x * m._13 + a.y * m._23 + a.z * m._33 + m._43;
+                    o.nx = a.nx * m._11 + a.ny * m._21 + a.nz * m._31;
+                    o.ny = a.nx * m._12 + a.ny * m._22 + a.nz * m._32;
+                    o.nz = a.nx * m._13 + a.ny * m._23 + a.nz * m._33;
+                    o.u0 = (slot.x + a.u0 * t->width) * (1.0f / kAtlasSize);
+                    o.v0 = (slot.y + a.v0 * t->height) * (1.0f / kAtlasSize);
+                }
+                for (DWORD x = 0; x < c.indexCount; x++)
+                    frame.indices.push_back((uint16_t)(frame.indices[c.firstIndex + x] + first));
+                first += c.vertexCount;
+            }
+            GfxCommand joinedCommand = frame.commands[i];
+            joinedCommand.buffer = NULL;
+            joinedCommand.firstVertexByte = (uint32_t)base;
+            joinedCommand.vertexCount = (uint32_t)vertices;
+            joinedCommand.firstIndex = firstIndex;
+            joinedCommand.indexCount = (uint32_t)indices;
+            joinedCommand.state = (uint32_t)frame.states.size();
+            GfxDrawState state = frame.states[frame.commands[i].state];
+            state.world = GfxMatrix{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+            state.stages[0].texture = &atlasTexture;
+            frame.states.push_back(state);
+            out.push_back(joinedCommand);
+            statJoinedRuns++;
+            statJoinedDraws += end - i;
+            joined = true;
+            i = end;
+        }
+        if (joined)
+            frame.commands.swap(out);
+    }
+#endif
+
     void UploadVertexBuffers(const GfxFrame &frame)
     {
         for (GfxVertexBuffer *b : frame.buffers) {
@@ -1508,6 +1728,7 @@ struct Executor : GfxExecutor {
             return;
 #ifdef OPENCMR2_RENDERER_GLES
         const uint64_t executeStart = statsOn ? SDL_GetTicksNS() : 0;
+        JoinTrees(frame);
 #endif
         for (const GfxDrawState &s : frame.states)
             for (const GfxStageState &stage : s.stages)
@@ -1685,10 +1906,12 @@ struct Executor : GfxExecutor {
             statSwapNs += SDL_GetTicksNS() - swapStart;
             if (++statFrames == 120) {
                 const uint64_t now = SDL_GetTicksNS();
-                Sys_Log("gfx stats: %.1f ms per frame: executor on the CPU %.1f, of it swap %.1f", (now - statWallStart) / 120e6,
-                        statExecNs / 120e6, statSwapNs / 120e6);
+                Sys_Log("gfx stats: %.1f ms per frame: executor on the CPU %.1f, of it swap %.1f; tree runs %.1f of %.1f draws per frame",
+                        (now - statWallStart) / 120e6, statExecNs / 120e6, statSwapNs / 120e6, statJoinedRuns / 120.0,
+                        statJoinedDraws / 120.0);
                 statWallStart = now;
                 statExecNs = statSwapNs = 0;
+                statJoinedRuns = statJoinedDraws = 0;
                 statFrames = 0;
             }
         }
